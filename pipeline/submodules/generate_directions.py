@@ -6,40 +6,67 @@ from jaxtyping import Float
 from torch import Tensor
 from tqdm import tqdm
 
-from pipeline.utils.hook_utils import add_hooks
 from pipeline.model_utils.model_base import ModelBase
 
-def get_mean_activations_pre_hook(layer, cache: Float[Tensor, "pos layer d_model"], n_samples, positions: List[int]):
-    def hook_fn(module, input):
-        activation: Float[Tensor, "batch_size seq_len d_model"] = input[0].clone().to(cache)
-        cache[:, layer] += (1.0 / n_samples) * activation[:, positions, :].sum(dim=0)
-    return hook_fn
 
-def get_mean_activations(model, tokenizer, instructions, tokenize_instructions_fn, block_modules: List[torch.nn.Module], batch_size=32, positions=[-1]):
+def get_mean_activations(model, tokenizer, instructions, tokenize_instructions_fn, block_modules=None, batch_size=1, positions=[-1]):
+    """
+    Get mean activations using TransformerLens's run_with_cache.
+
+    This uses TransformerLens's built-in activation caching for efficient extraction.
+
+    Args:
+        model: HookedTransformer model
+        tokenizer: Tokenizer
+        instructions: List of instruction strings
+        tokenize_instructions_fn: Function to tokenize instructions
+        block_modules: Unused, kept for API compatibility
+        batch_size: Batch size for processing
+        positions: List of positions to extract (negative indices from end)
+
+    Returns:
+        Mean activations tensor of shape (n_positions, n_layers, d_model)
+    """
     torch.cuda.empty_cache()
 
     n_positions = len(positions)
-    n_layers = model.config.num_hidden_layers
+    n_layers = model.cfg.n_layers
     n_samples = len(instructions)
-    d_model = model.config.hidden_size
+    d_model = model.cfg.d_model
 
-    # we store the mean activations in high-precision to avoid numerical issues
-    mean_activations = torch.zeros((n_positions, n_layers, d_model), dtype=torch.float64, device=model.device)
+    # Store mean activations in high-precision to avoid numerical issues
+    mean_activations = torch.zeros((n_positions, n_layers, d_model), dtype=torch.float64, device=model.cfg.device)
 
-    fwd_pre_hooks = [(block_modules[layer], get_mean_activations_pre_hook(layer=layer, cache=mean_activations, n_samples=n_samples, positions=positions)) for layer in range(n_layers)]
+    n_batches = (len(instructions) + batch_size - 1) // batch_size
 
-    for i in tqdm(range(0, len(instructions), batch_size)):
+    for i in tqdm(range(0, len(instructions), batch_size),
+                  desc=f"Extracting activations ({len(instructions)} examples)",
+                  unit="batch",
+                  total=n_batches):
         inputs = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
-        with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=[]):
-            model(
-                input_ids=inputs.input_ids.to(model.device),
-                attention_mask=inputs.attention_mask.to(model.device),
+        # Use TransformerLens's run_with_cache to get all activations
+        with torch.no_grad():
+            logits, cache = model.run_with_cache(
+                inputs.input_ids.to(model.cfg.device),
+                prepend_bos=False,  # Don't add BOS token (already in input)
             )
+
+        # Extract activations from residual stream at specified positions
+        for pos_idx, pos in enumerate(positions):
+            for layer in range(n_layers):
+                # Get residual stream activations at this layer
+                hook_name = f"blocks.{layer}.hook_resid_pre"
+                layer_activations = cache[hook_name]  # Shape: (batch, seq, d_model)
+
+                # Extract activations at the specified position and accumulate mean
+                # pos is negative, so layer_activations[:, pos, :] gets the right position
+                mean_activations[pos_idx, layer] += (1.0 / n_samples) * layer_activations[:, pos, :].sum(dim=0).to(torch.float64)
 
     return mean_activations
 
-def get_mean_diff(model, tokenizer, harmful_instructions, harmless_instructions, tokenize_instructions_fn, block_modules: List[torch.nn.Module], batch_size=32, positions=[-1]):
+
+def get_mean_diff(model, tokenizer, harmful_instructions, harmless_instructions, tokenize_instructions_fn, block_modules: List[torch.nn.Module], batch_size=1, positions=[-1]):
     mean_activations_harmful = get_mean_activations(model, tokenizer, harmful_instructions, tokenize_instructions_fn, block_modules, batch_size=batch_size, positions=positions)
     mean_activations_harmless = get_mean_activations(model, tokenizer, harmless_instructions, tokenize_instructions_fn, block_modules, batch_size=batch_size, positions=positions)
 
@@ -47,11 +74,11 @@ def get_mean_diff(model, tokenizer, harmful_instructions, harmless_instructions,
 
     return mean_diff
 
-def generate_directions(model_base: ModelBase, harmful_instructions, harmless_instructions, artifact_dir):
+def generate_directions(model_base: ModelBase, harmful_instructions, harmless_instructions, artifact_dir, batch_size=1):
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
 
-    mean_diffs = get_mean_diff(model_base.model, model_base.tokenizer, harmful_instructions, harmless_instructions, model_base.tokenize_instructions_fn, model_base.model_block_modules, positions=list(range(-len(model_base.eoi_toks), 0)))
+    mean_diffs = get_mean_diff(model_base.model, model_base.tokenizer, harmful_instructions, harmless_instructions, model_base.tokenize_instructions_fn, model_base.model_block_modules, batch_size=batch_size, positions=list(range(-len(model_base.eoi_toks), 0)))
 
     assert mean_diffs.shape == (len(model_base.eoi_toks), model_base.model.config.num_hidden_layers, model_base.model.config.hidden_size)
     assert not mean_diffs.isnan().any()

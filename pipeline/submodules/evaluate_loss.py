@@ -3,8 +3,8 @@ import itertools
 import json
 
 from datasets import load_dataset
+from tqdm import tqdm
 
-from pipeline.utils.hook_utils import add_hooks
 from pipeline.model_utils.model_base import ModelBase
 
 def batch_iterator_chat_completions(dataset_instructions, dataset_outputs, tokenize_instructions_fn, batch_size, eoi_toks):
@@ -80,23 +80,39 @@ def batch_iterator_pile(tokenizer, batch_size, max_length):
         yield inputs, loss_mask
 
 def compute_loss_over_dataset(model, tokenizer, batch_iterator, n_batches=256, fwd_pre_hooks=[], fwd_hooks=[]):
-    accumulated_loss = torch.tensor(0, dtype=torch.float64, device=model.device)
-    accumulated_n_tokens = torch.tensor(0, dtype=torch.int64, device=model.device)
+    device = model.cfg.device
+    accumulated_loss = torch.tensor(0, dtype=torch.float64, device=device)
+    accumulated_n_tokens = torch.tensor(0, dtype=torch.int64, device=device)
 
     batch_idx = 0
-    for inputs, loss_mask in batch_iterator:
+    total = n_batches if n_batches != -1 else None
+    for inputs, loss_mask in tqdm(batch_iterator, desc="Computing loss", total=total, unit="batch"):
         if n_batches != -1 and batch_idx >= n_batches:
             break
 
-        inputs = inputs.to(model.device)
-        loss_mask = loss_mask.to(model.device)
+        inputs = inputs.to(device)
+        loss_mask = loss_mask.to(device)
 
         input_ids = inputs["input_ids"]
 
-        with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            model_outputs = model(**inputs)
+        # Combine all hooks for TransformerLens
+        all_hooks = fwd_pre_hooks + fwd_hooks
 
-        logits = model_outputs.logits
+        if len(all_hooks) > 0:
+            # Use run_with_hooks for TransformerLens
+            logits = model.run_with_hooks(
+                input_ids,
+                fwd_hooks=all_hooks,
+                prepend_bos=False,
+            )
+        else:
+            # No hooks, just run the model
+            with torch.no_grad():
+                logits = model(
+                    input_ids,
+                    prepend_bos=False,
+                )
+
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
         log_probs_for_labels = log_probs[:, :-1].gather(dim=-1, index=input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
@@ -116,9 +132,9 @@ def compute_loss_over_dataset(model, tokenizer, batch_iterator, n_batches=256, f
         accumulated_n_tokens += loss_mask.sum()
 
         batch_idx += 1
-    
+
     ce_loss = accumulated_loss / accumulated_n_tokens
-    perplexity = torch.exp(ce_loss)    
+    perplexity = torch.exp(ce_loss)
 
     return ce_loss, perplexity, accumulated_n_tokens
 
