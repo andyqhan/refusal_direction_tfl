@@ -126,6 +126,8 @@ def parse_arguments():
                         help='Comma-separated list of evaluation methodologies (e.g., "substring_matching,llamaguard2"). '
                              'Available: substring_matching (free, rule-based), llamaguard2 (requires TOGETHER_API_KEY), harmbench (requires vLLM, Linux only). '
                              'Default: substring_matching')
+    parser.add_argument('--no-evaluation', action='store_true',
+                        help='Skip evaluation steps (Steps 6, 8, 9). Only generate completions without evaluating them. (default: run all evaluations)')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -361,7 +363,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 
     console.print(f"  [green]✓[/green] Loss evaluation for [bold]{intervention_label}[/bold]")
 
-def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None):
+def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None, no_evaluation=False):
     """Run the full pipeline."""
     console.print("\n")
     console.print(Panel.fit(
@@ -443,13 +445,17 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
         generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
 
     # 3b. Evaluate completions and save results on harmful evaluation datasets
-    console.print("\n")
-    console.print(Panel.fit("📈 Step 6: Evaluating Harmful Dataset Completions", style="bold cyan"))
-    for dataset_name in cfg.evaluation_datasets:
-        console.print(f"\n[yellow]Evaluating dataset:[/yellow] [bold]{dataset_name}[/bold]")
-        evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-        evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-        evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+    if not no_evaluation:
+        console.print("\n")
+        console.print(Panel.fit("📈 Step 6: Evaluating Harmful Dataset Completions", style="bold cyan"))
+        for dataset_name in cfg.evaluation_datasets:
+            console.print(f"\n[yellow]Evaluating dataset:[/yellow] [bold]{dataset_name}[/bold]")
+            evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+            evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+            evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+    else:
+        console.print("\n")
+        console.print("[dim]⏭  Step 6: Skipped (--no-evaluation)[/dim]")
 
     # 4a. Generate and save completions on harmless evaluation dataset
     console.print("\n")
@@ -466,17 +472,25 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
     # 4b. Evaluate completions and save results on harmless evaluation dataset
-    console.print("\n")
-    console.print(Panel.fit("📊 Step 8: Evaluating Harmless Dataset Completions", style="bold cyan"))
-    evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
-    evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+    if not no_evaluation:
+        console.print("\n")
+        console.print(Panel.fit("📊 Step 8: Evaluating Harmless Dataset Completions", style="bold cyan"))
+        evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+        evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+    else:
+        console.print("\n")
+        console.print("[dim]⏭  Step 8: Skipped (--no-evaluation)[/dim]")
 
     # 5. Evaluate loss on harmless datasets
-    console.print("\n")
-    console.print(Panel.fit("📉 Step 9: Evaluating Cross-Entropy Loss", style="bold cyan"))
-    evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
-    evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
-    evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+    if not no_evaluation:
+        console.print("\n")
+        console.print(Panel.fit("📉 Step 9: Evaluating Cross-Entropy Loss", style="bold cyan"))
+        evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
+        evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
+        evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+    else:
+        console.print("\n")
+        console.print("[dim]⏭  Step 9: Skipped (--no-evaluation)[/dim]")
 
     console.print("\n")
     console.print(Panel.fit(
@@ -491,11 +505,13 @@ if __name__ == "__main__":
     cache_layers = getattr(args, 'cache_layers', None)
     eval_datasets = getattr(args, 'eval_datasets', None)
     eval_methodologies = getattr(args, 'eval_methodologies', None)
+    no_evaluation = getattr(args, 'no_evaluation', False)
     run_pipeline(
         model_path=args.model_path,
         batch_size=args.batch_size,
         ignore_cached_direction=ignore_cached,
         cache_layers=cache_layers,
         eval_datasets=eval_datasets,
-        eval_methodologies=eval_methodologies
+        eval_methodologies=eval_methodologies,
+        no_evaluation=no_evaluation
     )

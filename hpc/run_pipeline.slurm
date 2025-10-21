@@ -1,4 +1,6 @@
 #!/bin/bash
+#SBATCH -A pr_130_tandon_advanced
+#SBATCH -p rtx8000
 #SBATCH --job-name=refusal_direction
 #SBATCH --output=logs/refusal_%j.out
 #SBATCH --error=logs/refusal_%j.err
@@ -7,7 +9,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64GB
 #SBATCH --time=24:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:rtx8000:1
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ah7660@nyu.edu
 
@@ -69,7 +71,7 @@ SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-/scratch/work/public/singularity/cuda12.6
 SINGULARITY_OVERLAY_INPUT=${SINGULARITY_OVERLAY:-/scratch/ah7660/overlay-25GB-500K.ext3}
 ENV_WRAPPER=${ENV_WRAPPER:-/ext3/env.sh}
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-refusal_direction}
-PIPELINE_ARGS=${PIPELINE_ARGS:-"--batch_size 16 --eval-datasets harmbench_val,strongreject --cache-layers 8"}
+PIPELINE_ARGS=${PIPELINE_ARGS:-"--batch_size 32 --eval-datasets harmbench_val,strongreject --cache-layers 8 --no-evaluation"}
 
 resolve_overlay_path() {
     local input_path="$1"
@@ -127,7 +129,7 @@ fi
 # -----------------------------------------------------------------------------
 # Model argument handling
 # -----------------------------------------------------------------------------
-MODEL_PATH=${1:-"meta-llama/Meta-Llama-3-8B-Instruct"}
+MODEL_PATH=${1:-"Qwen/Qwen2.5-7B-Instruct"}
 
 echo "Target model:       $MODEL_PATH"
 

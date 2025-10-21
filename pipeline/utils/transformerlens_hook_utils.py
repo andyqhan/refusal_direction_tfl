@@ -105,16 +105,6 @@ def get_all_direction_ablation_hooks(
         hook_name = f"blocks.{layer}.hook_resid_pre"
         fwd_hooks.append((hook_name, get_direction_ablation_hook(direction)))
 
-    # Ablate from attention outputs
-    for layer in range(n_layers):
-        hook_name = f"blocks.{layer}.attn.hook_result"
-        fwd_hooks.append((hook_name, get_direction_ablation_hook(direction)))
-
-    # Ablate from MLP outputs
-    for layer in range(n_layers):
-        hook_name = f"blocks.{layer}.hook_mlp_out"
-        fwd_hooks.append((hook_name, get_direction_ablation_hook(direction)))
-
     # Return (fwd_hooks, empty_list) for API compatibility
     # The original code expects (fwd_pre_hooks, fwd_hooks) but in TransformerLens
     # we handle everything through run_with_hooks which takes a single list
