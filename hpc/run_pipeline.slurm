@@ -11,7 +11,6 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ah7660@nyu.edu
 
-# Exit on error
 set -e
 
 echo "=================================================="
@@ -21,86 +20,144 @@ echo "Node: $SLURM_NODELIST"
 echo "GPUs: $CUDA_VISIBLE_DEVICES"
 echo "=================================================="
 
-# Load required modules
-module purge
-module load python/intel/3.8.6
-
-# Set up directories
+# -----------------------------------------------------------------------------
+# Path configuration
+# -----------------------------------------------------------------------------
 SCRATCH_DIR=/scratch/ah7660/refusal_direction_tfl
-PROJECT_DIR=$SCRATCH_DIR/code
-VENV_DIR=$SCRATCH_DIR/venv
+DEFAULT_PROJECT_DIR=$SCRATCH_DIR/code
 CACHE_DIR=$SCRATCH_DIR/cache
 RESULTS_DIR=$SCRATCH_DIR/results
+SUBMIT_DIR=$SLURM_SUBMIT_DIR
 
-# Create directories if they don't exist
-mkdir -p $PROJECT_DIR
-mkdir -p $VENV_DIR
-mkdir -p $CACHE_DIR
-mkdir -p $RESULTS_DIR
-mkdir -p logs
-
-echo "Scratch directory: $SCRATCH_DIR"
-echo "Results directory: $RESULTS_DIR"
-
-# Copy code to scratch if this is first run
-if [ ! -d "$PROJECT_DIR/.git" ]; then
-    echo "Copying code to scratch..."
-    rsync -av --exclude='.git' --exclude='venv' --exclude='__pycache__' \
-        $SLURM_SUBMIT_DIR/ $PROJECT_DIR/
+# Determine project directory location.
+if [ -d "$SCRATCH_DIR/.git" ]; then
+    PROJECT_DIR=$SCRATCH_DIR
+    CODE_SYNC_REQUIRED=false
+elif [ -d "$DEFAULT_PROJECT_DIR/.git" ]; then
+    PROJECT_DIR=$DEFAULT_PROJECT_DIR
+    CODE_SYNC_REQUIRED=false
 else
-    echo "Code already exists in scratch, syncing updates..."
+    PROJECT_DIR=$DEFAULT_PROJECT_DIR
+    CODE_SYNC_REQUIRED=true
+fi
+
+echo "Project directory: $PROJECT_DIR"
+echo "Submit directory:  $SUBMIT_DIR"
+
+# Ensure directories exist
+mkdir -p "$PROJECT_DIR"
+mkdir -p "$CACHE_DIR"
+mkdir -p "$RESULTS_DIR"
+mkdir -p "$SUBMIT_DIR/logs"
+
+# Sync code if necessary (typically when submitting from home directory).
+if [ "$CODE_SYNC_REQUIRED" = true ]; then
+    echo "Syncing project code to scratch..."
     rsync -av --exclude='.git' --exclude='venv' --exclude='__pycache__' \
-        --exclude='pipeline/runs' --exclude='dataset' \
-        $SLURM_SUBMIT_DIR/ $PROJECT_DIR/
+        --exclude='*.pyc' --exclude='.venv' \
+        "$SUBMIT_DIR/" "$PROJECT_DIR/"
+else
+    echo "Project already resident on scratch; skipping rsync."
 fi
 
-cd $PROJECT_DIR
+cd "$PROJECT_DIR"
 
-# Set up virtual environment if it doesn't exist
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv $VENV_DIR
+# -----------------------------------------------------------------------------
+# Singularity configuration
+# -----------------------------------------------------------------------------
+SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-/scratch/work/public/singularity/cuda12.6.3-cudnn9.5.1-ubuntu22.04.5.sif}
+SINGULARITY_OVERLAY_INPUT=${SINGULARITY_OVERLAY:-/scratch/ah7660/overlay-25GB-500K.ext3}
+ENV_WRAPPER=${ENV_WRAPPER:-/ext3/env.sh}
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-refusal_direction}
+PIPELINE_ARGS=${PIPELINE_ARGS:-"--batch_size 16 --eval-datasets harmbench_val,strongreject --cache-layers 8"}
+
+resolve_overlay_path() {
+    local input_path="$1"
+    local overlay_path=""
+    local overlay_archive=""
+
+    if [[ "$input_path" == *.gz ]]; then
+        overlay_archive="$input_path"
+        overlay_path="${input_path%.gz}"
+    else
+        overlay_path="$input_path"
+        overlay_archive="${input_path}.gz"
+    fi
+
+    if [ -f "$overlay_path" ]; then
+        echo "$overlay_path"
+        return 0
+    fi
+
+    if [ -f "$overlay_archive" ]; then
+        echo "Decompressing overlay archive $overlay_archive ..."
+        gunzip -k "$overlay_archive"
+        echo "$overlay_path"
+        return 0
+    fi
+
+    echo "ERROR: Overlay file not found at $overlay_path (or $overlay_archive)." >&2
+    echo "Run hpc/setup_greene.sh to provision the overlay before submitting jobs." >&2
+    return 1
+}
+
+OVERLAY_PATH=$(resolve_overlay_path "$SINGULARITY_OVERLAY_INPUT") || exit 1
+
+if [ ! -f "$SINGULARITY_IMAGE" ]; then
+    echo "ERROR: Singularity image $SINGULARITY_IMAGE not found." >&2
+    exit 1
 fi
 
-# Activate virtual environment
-source $VENV_DIR/bin/activate
+if ! command -v singularity >/dev/null 2>&1; then
+    echo "ERROR: 'singularity' command not available. Load the appropriate module (e.g., module load singularity) in your job submission script." >&2
+    exit 1
+fi
 
-# Upgrade pip
-pip install --upgrade pip
+echo "Singularity image:  $SINGULARITY_IMAGE"
+echo "Singularity overlay: $OVERLAY_PATH"
+echo "Conda env:          $CONDA_ENV_NAME"
+echo "Env wrapper script: $ENV_WRAPPER"
+echo "Pipeline args:      $PIPELINE_ARGS"
 
-# Install dependencies
-echo "Installing dependencies..."
-pip install -r requirements.txt
+if ! singularity exec --overlay "${OVERLAY_PATH}:ro" "${SINGULARITY_IMAGE}" /bin/bash -c "[ -f ${ENV_WRAPPER} ]"; then
+    echo "ERROR: Environment wrapper ${ENV_WRAPPER} not found inside overlay. Run hpc/setup_greene.sh before submitting jobs." >&2
+    exit 1
+fi
 
-# Set HuggingFace cache directory (to avoid filling up home directory)
-export HF_HOME=$CACHE_DIR
-export TRANSFORMERS_CACHE=$CACHE_DIR
-export HF_DATASETS_CACHE=$CACHE_DIR
+# -----------------------------------------------------------------------------
+# Model argument handling
+# -----------------------------------------------------------------------------
+MODEL_PATH=${1:-"meta-llama/Meta-Llama-3-8B-Instruct"}
 
-# Set Together AI API key if available
-# Note: Set this in your environment before submitting the job
-# export TOGETHER_API_KEY=your_key_here
+echo "Target model:       $MODEL_PATH"
 
-# Parse model path from command line or use default
-MODEL_PATH=${1:-"Qwen/Qwen3-8B"}
-
+# -----------------------------------------------------------------------------
+# Display environment info
+# -----------------------------------------------------------------------------
 echo "=================================================="
-echo "Running pipeline with model: $MODEL_PATH"
-echo "Python: $(which python)"
-echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
-echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+echo "Environment diagnostics"
+singularity exec --nv --overlay "${OVERLAY_PATH}:ro" "${SINGULARITY_IMAGE}" /bin/bash -lc "
+set -e
+source ${ENV_WRAPPER}
+echo \"Container Python: \$(python3 --version)\"
+echo \"PyTorch: \$(python3 -c 'import torch; print(torch.__version__)')\"
+echo \"CUDA available: \$(python3 -c 'import torch; print(torch.cuda.is_available())')\"
+echo \"CUDA devices: \$(python3 -c 'import torch; print(torch.cuda.device_count())')\"
+"
 echo "=================================================="
 
-# Run the pipeline
-python3 -m pipeline.run_pipeline \
-    --model_path "$MODEL_PATH" \
-    --batch_size 16 \
-    --eval-datasets harmbench_val,strongreject \
-    --cache-layers 8
+# -----------------------------------------------------------------------------
+# Run pipeline inside container
+# -----------------------------------------------------------------------------
+RUN_COMMAND="cd ${PROJECT_DIR} && \
+source ${ENV_WRAPPER} && \
+export HF_HOME=${CACHE_DIR} && \
+export TRANSFORMERS_CACHE=${CACHE_DIR} && \
+export HF_DATASETS_CACHE=${CACHE_DIR} && \
+python3 -m pipeline.run_pipeline --model_path \"${MODEL_PATH}\" ${PIPELINE_ARGS}"
 
-# Copy results back to submit directory if desired
-# rsync -av pipeline/runs/ $SLURM_SUBMIT_DIR/pipeline/runs/
+echo "Executing pipeline..."
+singularity exec --nv --overlay "${OVERLAY_PATH}:ro" "${SINGULARITY_IMAGE}" /bin/bash -lc "$RUN_COMMAND"
 
 echo "=================================================="
 echo "Job completed at: $(date)"
