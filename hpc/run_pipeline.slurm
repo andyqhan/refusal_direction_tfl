@@ -90,7 +90,7 @@ resolve_overlay_path() {
     fi
 
     if [ -f "$overlay_archive" ]; then
-        echo "Decompressing overlay archive $overlay_archive ..."
+        echo "Decompressing overlay archive $overlay_archive ..." >&2
         gunzip -k "$overlay_archive"
         echo "$overlay_path"
         return 0

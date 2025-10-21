@@ -62,7 +62,7 @@ resolve_overlay_path() {
     fi
 
     if [ -f "$overlay_archive" ]; then
-        echo "Decompressing overlay archive $overlay_archive ..."
+        echo "Decompressing overlay archive $overlay_archive ..." >&2
         gunzip -k "$overlay_archive"
         echo "$overlay_path"
         return 0
@@ -77,9 +77,9 @@ resolve_overlay_path() {
         echo "ERROR: Default overlay archive $default_archive not found. Please specify SINGULARITY_OVERLAY manually." >&2
         return 1
     fi
-    echo "Overlay not found. Copying default overlay to $overlay_archive ..."
+    echo "Overlay not found. Copying default overlay to $overlay_archive ..." >&2
     cp "$default_archive" "$overlay_archive"
-    echo "Decompressing overlay archive $overlay_archive ..."
+    echo "Decompressing overlay archive $overlay_archive ..." >&2
     gunzip -k "$overlay_archive"
     echo "${overlay_archive%.gz}"
     return 0
