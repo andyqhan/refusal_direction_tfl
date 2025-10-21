@@ -69,7 +69,7 @@ echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 echo "=================================================="
 
 # Run the pipeline
-python3 -m pipeline.run_pipeline --model_path "$MODEL"
+python3 -m pipeline.run_pipeline --model_path "$MODEL" < /dev/null
 
 echo "=================================================="
 echo "Job completed at: $(date)"

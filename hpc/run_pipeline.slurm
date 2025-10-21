@@ -71,7 +71,7 @@ SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-/scratch/work/public/singularity/cuda12.6
 SINGULARITY_OVERLAY_INPUT=${SINGULARITY_OVERLAY:-/scratch/ah7660/overlay-25GB-500K.ext3}
 ENV_WRAPPER=${ENV_WRAPPER:-/ext3/env.sh}
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-refusal_direction}
-PIPELINE_ARGS=${PIPELINE_ARGS:-"--batch_size 32 --eval-datasets harmbench_val,strongreject --cache-layers 8 --no-evaluation"}
+PIPELINE_ARGS=${PIPELINE_ARGS:-"--batch_size 16 --eval-datasets harmbench_val,strongreject --cache-layers 8 --no-evaluation"}
 
 resolve_overlay_path() {
     local input_path="$1"
@@ -159,7 +159,7 @@ export HF_DATASETS_CACHE=${CACHE_DIR} && \
 python3 -m pipeline.run_pipeline --model_path \"${MODEL_PATH}\" ${PIPELINE_ARGS}"
 
 echo "Executing pipeline..."
-singularity exec --nv --overlay "${OVERLAY_PATH}:ro" "${SINGULARITY_IMAGE}" /bin/bash -lc "$RUN_COMMAND"
+singularity exec --nv --overlay "${OVERLAY_PATH}:ro" "${SINGULARITY_IMAGE}" /bin/bash -lc "$RUN_COMMAND" < /dev/null
 
 echo "=================================================="
 echo "Job completed at: $(date)"

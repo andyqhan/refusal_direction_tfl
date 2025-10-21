@@ -128,6 +128,8 @@ def parse_arguments():
                              'Default: substring_matching')
     parser.add_argument('--no-evaluation', action='store_true',
                         help='Skip evaluation steps (Steps 6, 8, 9). Only generate completions without evaluating them. (default: run all evaluations)')
+    parser.add_argument('--force-regenerate', action='store_true',
+                        help='Force regeneration of all completions and evaluations, even if they already exist (default: use cached if valid)')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -312,7 +314,7 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
 
     return pos, layer, direction
 
-def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
+def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None, force_regenerate=False):
     """Generate and save completions for a dataset."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'completions'))
@@ -321,18 +323,47 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
         with console.status(f"[cyan]Loading dataset '{dataset_name}'..."):
             dataset = load_dataset(dataset_name)
 
+    save_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json'
+
+    # Check if completions already exist and are valid
+    if os.path.exists(save_path) and not force_regenerate:
+        try:
+            with open(save_path, 'r') as f:
+                cached_completions = json.load(f)
+
+            # Validate: check if we have the right number of completions
+            if len(cached_completions) == len(dataset):
+                console.print(f"  [dim]✓ Using cached completions for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold][/dim]")
+                return
+            else:
+                console.print(f"  [yellow]⚠ Invalid cached file for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold] (expected {len(dataset)}, got {len(cached_completions)}), regenerating[/yellow]")
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            console.print(f"  [yellow]⚠ Corrupted cached file for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold], regenerating[/yellow]")
+
     with console.status(f"[cyan]Generating {len(dataset)} completions for '{dataset_name}' with intervention '{intervention_label}'..."):
         completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens, batch_size=cfg.batch_size)
 
-    save_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json'
     with open(save_path, "w") as f:
         json.dump(completions, f, indent=4)
     console.print(f"  [green]✓[/green] Saved [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold] completions")
 
-def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies):
+def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies, force_regenerate=False):
     """Evaluate completions and save results for a dataset."""
+    completions_path = os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json')
+    save_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json'
+
+    # Check if completions file exists
+    if not os.path.exists(completions_path):
+        console.print(f"  [yellow]⚠ Skipping evaluation for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold]: completions file not found[/yellow]")
+        return
+
+    # Check if evaluation already exists
+    if os.path.exists(save_path) and not force_regenerate:
+        console.print(f"  [dim]✓ Using cached evaluation for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold][/dim]")
+        return
+
     with console.status(f"[cyan]Evaluating '{dataset_name}' + '{intervention_label}' using {eval_methodologies}..."):
-        with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r') as f:
+        with open(completions_path, 'r') as f:
             completions = json.load(f)
 
         evaluation = evaluate_jailbreak(
@@ -341,29 +372,34 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
             evaluation_path=os.path.join(cfg.artifact_path(), "completions", f"{dataset_name}_{intervention_label}_evaluations.json"),
         )
 
-        save_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json'
         with open(save_path, "w") as f:
             json.dump(evaluation, f, indent=4)
 
     console.print(f"  [green]✓[/green] Evaluated [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold]")
 
-def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label):
+def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, force_regenerate=False):
     """Evaluate loss on datasets."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'loss_evals')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'loss_evals'))
+
+    save_path = f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json'
+
+    # Check if loss evaluation already exists
+    if os.path.exists(save_path) and not force_regenerate:
+        console.print(f"  [dim]✓ Using cached loss evaluation for [bold]{intervention_label}[/bold][/dim]")
+        return
 
     with console.status(f"[cyan]Evaluating cross-entropy loss for intervention '{intervention_label}'..."):
         on_distribution_completions_file_path = os.path.join(cfg.artifact_path(), f'completions/harmless_baseline_completions.json')
 
         loss_evals = evaluate_loss(model_base, fwd_pre_hooks, fwd_hooks, batch_size=cfg.ce_loss_batch_size, n_batches=cfg.ce_loss_n_batches, completions_file_path=on_distribution_completions_file_path)
 
-        save_path = f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json'
         with open(save_path, "w") as f:
             json.dump(loss_evals, f, indent=4)
 
     console.print(f"  [green]✓[/green] Loss evaluation for [bold]{intervention_label}[/bold]")
 
-def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None, no_evaluation=False):
+def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None, no_evaluation=False, force_regenerate=False):
     """Run the full pipeline."""
     console.print("\n")
     console.print(Panel.fit(
@@ -400,6 +436,8 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     info_table.add_row("[bold]Eval methodologies:[/bold]", f"[yellow]{', '.join(cfg.jailbreak_eval_methodologies)}[/yellow]")
     if cache_layers is not None:
         info_table.add_row("[bold]Cache layers:[/bold]", f"[yellow]{cache_layers}[/yellow]")
+    if force_regenerate:
+        info_table.add_row("[bold]Force regenerate:[/bold]", f"[yellow]True[/yellow]")
     info_table.add_row("[bold]Artifacts path:[/bold]", f"[dim]{cfg.artifact_path()}[/dim]")
     console.print(info_table)
 
@@ -440,9 +478,9 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     # 3a. Generate and save completions on harmful evaluation datasets
     for dataset_name in cfg.evaluation_datasets:
         console.print(f"\n[yellow]Processing dataset:[/yellow] [bold]{dataset_name}[/bold]")
-        generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
-        generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
-        generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
+        generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name, force_regenerate=force_regenerate)
+        generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name, force_regenerate=force_regenerate)
+        generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name, force_regenerate=force_regenerate)
 
     # 3b. Evaluate completions and save results on harmful evaluation datasets
     if not no_evaluation:
@@ -450,9 +488,9 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
         console.print(Panel.fit("📈 Step 6: Evaluating Harmful Dataset Completions", style="bold cyan"))
         for dataset_name in cfg.evaluation_datasets:
             console.print(f"\n[yellow]Evaluating dataset:[/yellow] [bold]{dataset_name}[/bold]")
-            evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-            evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-            evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+            evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, force_regenerate=force_regenerate)
+            evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, force_regenerate=force_regenerate)
+            evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, force_regenerate=force_regenerate)
     else:
         console.print("\n")
         console.print("[dim]⏭  Step 6: Skipped (--no-evaluation)[/dim]")
@@ -464,19 +502,19 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     with console.status(f"[cyan]Loading {cfg.n_test} harmless test examples..."):
         harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
-    generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
+    generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate)
 
     actadd_refusal_hooks, _ = get_activation_addition_hooks(model_base, direction, +1.0, layer)
     actadd_refusal_pre_hooks = []
 
-    generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
+    generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate)
 
     # 4b. Evaluate completions and save results on harmless evaluation dataset
     if not no_evaluation:
         console.print("\n")
         console.print(Panel.fit("📊 Step 8: Evaluating Harmless Dataset Completions", style="bold cyan"))
-        evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
-        evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+        evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies, force_regenerate=force_regenerate)
+        evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies, force_regenerate=force_regenerate)
     else:
         console.print("\n")
         console.print("[dim]⏭  Step 8: Skipped (--no-evaluation)[/dim]")
@@ -485,9 +523,9 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     if not no_evaluation:
         console.print("\n")
         console.print(Panel.fit("📉 Step 9: Evaluating Cross-Entropy Loss", style="bold cyan"))
-        evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
-        evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
-        evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+        evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', force_regenerate=force_regenerate)
+        evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', force_regenerate=force_regenerate)
+        evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', force_regenerate=force_regenerate)
     else:
         console.print("\n")
         console.print("[dim]⏭  Step 9: Skipped (--no-evaluation)[/dim]")
@@ -506,6 +544,7 @@ if __name__ == "__main__":
     eval_datasets = getattr(args, 'eval_datasets', None)
     eval_methodologies = getattr(args, 'eval_methodologies', None)
     no_evaluation = getattr(args, 'no_evaluation', False)
+    force_regenerate = getattr(args, 'force_regenerate', False)
     run_pipeline(
         model_path=args.model_path,
         batch_size=args.batch_size,
@@ -513,5 +552,6 @@ if __name__ == "__main__":
         cache_layers=cache_layers,
         eval_datasets=eval_datasets,
         eval_methodologies=eval_methodologies,
-        no_evaluation=no_evaluation
+        no_evaluation=no_evaluation,
+        force_regenerate=force_regenerate
     )
