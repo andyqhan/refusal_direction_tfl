@@ -8,24 +8,12 @@ This repository implements the research from "Refusal in Language Models Is Medi
 
 **Content Warning**: This repository contains text that is offensive, harmful, or otherwise inappropriate. The research is defensive in nature, studying model safety mechanisms.
 
-## Setup and Environment
-
-### Initial Setup
-```bash
-source setup.sh
-```
-
-This script:
-- Validates Python 3.10+ installation
-- Prompts for HuggingFace token (required for gated models like Llama)
-- Prompts for Together AI token (required for jailbreak safety score evaluation)
-- Creates virtual environment in `venv/`
-- Installs dependencies from `requirements.txt`
-- Stores tokens in `.env` file
+## Environment
+- The virtual environment is located in `.venv`.
 
 ### Manual Environment Activation
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ## Running the Pipeline
@@ -264,6 +252,22 @@ with open('pipeline/runs/{model_alias}/direction_metadata.json') as f:
 - **Activation Addition (actadd)**: Add/subtract refusal direction at a single layer
 
 **Refusal Scores**: Probability assigned to refusal tokens (like "I") at the first generation position. Higher score indicates stronger refusal.
+
+## Running on NYU HPC (Greene Cluster)
+
+For NYU PhD students and researchers with access to Greene:
+
+**HPC Documentation**: Complete documentation for running this pipeline on Greene is available at `~/Documents/school-work/work-25-q4f/pavel-research/hpc_docs/`
+
+**Quick Start on Greene**:
+1. See `hpc/` directory in this repo for SLURM job scripts
+2. Review `hpc/README.md` for detailed setup instructions
+3. Submit jobs with `sbatch hpc/run_pipeline.slurm`
+
+**Key Resources**:
+- HPC Docs: `~/Documents/school-work/work-25-q4f/pavel-research/hpc_docs/README.md`
+- GPU Guide: `~/Documents/school-work/work-25-q4f/pavel-research/hpc_docs/05-gpu-cuda-usage.md`
+- ML Workflows: `~/Documents/school-work/work-25-q4f/pavel-research/hpc_docs/06-ml-ai-workflows.md`
 
 ## Important Notes
 

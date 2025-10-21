@@ -118,6 +118,14 @@ def parse_arguments():
                         help='Control which layers to cache activations for. Can be an integer (number of evenly-spaced layers), '
                              '"all" (cache all layers), "final" (only final layer), "threefourths" (layer at 3L/4), or "half" (layer at L/2). '
                              'Default: "all".')
+    parser.add_argument('--eval-datasets', type=str, default=None,
+                        help='Comma-separated list of evaluation datasets to run (e.g., "harmbench_test,strongreject"). '
+                             'Available datasets: advbench, harmbench_test, harmbench_val, jailbreakbench, malicious_instruct, strongreject, tdc2023. '
+                             'Default: harmbench_val')
+    parser.add_argument('--eval-methodologies', type=str, default=None,
+                        help='Comma-separated list of evaluation methodologies (e.g., "substring_matching,llamaguard2"). '
+                             'Available: substring_matching (free, rule-based), llamaguard2 (requires TOGETHER_API_KEY), harmbench (requires vLLM, Linux only). '
+                             'Default: substring_matching')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -353,7 +361,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 
     console.print(f"  [green]✓[/green] Loss evaluation for [bold]{intervention_label}[/bold]")
 
-def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None):
+def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None):
     """Run the full pipeline."""
     console.print("\n")
     console.print(Panel.fit(
@@ -362,11 +370,32 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     ))
 
     model_alias = os.path.basename(model_path)
-    cfg = Config(model_alias=model_alias, model_path=model_path, batch_size=batch_size)
+
+    # Parse eval_datasets if provided
+    if eval_datasets is not None:
+        eval_datasets_tuple = tuple(ds.strip() for ds in eval_datasets.split(','))
+    else:
+        eval_datasets_tuple = ("harmbench_val",)
+
+    # Parse eval_methodologies if provided
+    if eval_methodologies is not None:
+        eval_methodologies_tuple = tuple(m.strip() for m in eval_methodologies.split(','))
+    else:
+        eval_methodologies_tuple = ("substring_matching",)
+
+    cfg = Config(
+        model_alias=model_alias,
+        model_path=model_path,
+        batch_size=batch_size,
+        evaluation_datasets=eval_datasets_tuple,
+        jailbreak_eval_methodologies=eval_methodologies_tuple
+    )
 
     info_table = Table(show_header=False, box=None, padding=(0, 2))
     info_table.add_row("[bold]Model alias:[/bold]", f"[yellow]{model_alias}[/yellow]")
     info_table.add_row("[bold]Batch size:[/bold]", f"[yellow]{cfg.batch_size}[/yellow]")
+    info_table.add_row("[bold]Eval datasets:[/bold]", f"[yellow]{', '.join(cfg.evaluation_datasets)}[/yellow]")
+    info_table.add_row("[bold]Eval methodologies:[/bold]", f"[yellow]{', '.join(cfg.jailbreak_eval_methodologies)}[/yellow]")
     if cache_layers is not None:
         info_table.add_row("[bold]Cache layers:[/bold]", f"[yellow]{cache_layers}[/yellow]")
     info_table.add_row("[bold]Artifacts path:[/bold]", f"[dim]{cfg.artifact_path()}[/dim]")
@@ -460,4 +489,13 @@ if __name__ == "__main__":
     # Note: argparse converts hyphens to underscores in attribute names
     ignore_cached = getattr(args, 'ignore_cached_direction', False)
     cache_layers = getattr(args, 'cache_layers', None)
-    run_pipeline(model_path=args.model_path, batch_size=args.batch_size, ignore_cached_direction=ignore_cached, cache_layers=cache_layers)
+    eval_datasets = getattr(args, 'eval_datasets', None)
+    eval_methodologies = getattr(args, 'eval_methodologies', None)
+    run_pipeline(
+        model_path=args.model_path,
+        batch_size=args.batch_size,
+        ignore_cached_direction=ignore_cached,
+        cache_layers=cache_layers,
+        eval_datasets=eval_datasets,
+        eval_methodologies=eval_methodologies
+    )

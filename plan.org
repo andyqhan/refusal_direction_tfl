@@ -1,0 +1,8 @@
+#+title: Plan
+see: https://chatgpt.com/c/68f694d6-2354-832d-b17c-2f9f827a8dac
+* Phase 1
+** Models to test
+- Gemma 3 12B (=google/gemma-3-12b-it=)
+- Qwen3 8B (=Qwen/Qwen3-8B=)
+** Baseline: Replicate single direction refusal
+- use HarmBench and StrongREJECT as core harmful set.

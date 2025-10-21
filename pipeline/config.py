@@ -13,10 +13,10 @@ class Config:
     n_val: int = 32
     filter_train: bool = True
     filter_val: bool = True
-    evaluation_datasets: Tuple[str] = ("jailbreakbench",)
+    evaluation_datasets: Tuple[str] = ("harmbench_val",)
     max_new_tokens: int = 512
     batch_size: int = 1
-    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2")
+    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching",)
     refusal_eval_methodologies: Tuple[str] = ("substring_matching",)
     ce_loss_batch_size: int = 2
     ce_loss_n_batches: int = 2048
