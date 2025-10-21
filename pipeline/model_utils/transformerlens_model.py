@@ -190,14 +190,25 @@ class TransformerLensModel(ModelBase):
 
     def _load_model(self, model_name_or_path: str) -> HookedTransformer:
         """Load model using TransformerLens's HookedTransformer."""
+        # Detect best available device: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+
         model = HookedTransformer.from_pretrained(
             model_name_or_path,
             torch_dtype=self.dtype,
-            device="cuda" if torch.cuda.is_available() else "cpu",
+            device=device,
             fold_ln=False,  # Keep LayerNorm separate for better interpretability
             center_writing_weights=False,  # Don't center weights
             center_unembed=False,  # Don't center unembed
         )
+
+        # Enable hook_result hook on attention layers (must be set after loading)
+        model.set_use_attn_result(True)
 
         model.eval()
         model.requires_grad_(False)
@@ -294,7 +305,8 @@ class TransformerLensModel(ModelBase):
             List of completion dicts with 'category', 'prompt', 'response' keys
         """
         from transformers import GenerationConfig
-        from tqdm import tqdm
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn, TaskProgressColumn
+        import contextlib
 
         generation_config = GenerationConfig(
             max_new_tokens=max_new_tokens,
@@ -310,26 +322,33 @@ class TransformerLensModel(ModelBase):
         # Combine hooks
         all_hooks = fwd_pre_hooks + fwd_hooks
 
-        for i in tqdm(range(0, len(dataset), batch_size), desc="Generating completions", unit="batch"):
-            tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size])
+        # Calculate total batches
+        n_batches = (len(dataset) + batch_size - 1) // batch_size
 
-            # TransformerLens doesn't have a built-in generate method with hooks
-            # We need to use HuggingFace's generate but with TransformerLens hooks registered
-            # For now, we'll use a workaround: generate with HF, but apply hooks
+        # Create nested progress bars with Rich
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            # Batch-level progress
+            batch_task = progress.add_task("[cyan]Generating completions", total=n_batches)
+            # Token-level progress - use indeterminate progress since we can't track real-time
+            token_task = progress.add_task("[dim]  └─ Generating tokens...", total=None, visible=False)
 
-            if len(all_hooks) > 0:
-                # Register TransformerLens hooks temporarily for generation
-                # This is a workaround since HF's generate doesn't directly support TL hooks
-                # We need to use the model's generate method from HuggingFace
-                # but TransformerLens wraps the forward pass
+            for batch_idx in range(0, len(dataset), batch_size):
+                current_batch_num = batch_idx // batch_size + 1
+                current_batch_size = min(batch_size, len(dataset) - batch_idx)
 
-                # Convert to device
-                input_ids = tokenized_instructions.input_ids.to(self.model.cfg.device)
-                attention_mask = tokenized_instructions.attention_mask.to(self.model.cfg.device)
+                # Update batch description with current batch info
+                progress.update(batch_task, description=f"[cyan]Batch {current_batch_num}/{n_batches} ({current_batch_size} prompts)")
 
-                # Use context manager to apply hooks during generation
-                # Note: TransformerLens hooks apply to forward passes, and generate calls forward multiple times
-                import contextlib
+                # Show token progress for this batch
+                progress.update(token_task, visible=True, description=f"[dim]  └─ Generating tokens (max {max_new_tokens})...")
+
+                tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[batch_idx:batch_idx + batch_size])
 
                 @contextlib.contextmanager
                 def temporary_hooks(hook_list):
@@ -337,48 +356,55 @@ class TransformerLensModel(ModelBase):
                     handles = []
                     try:
                         for hook_name, hook_fn in hook_list:
-                            # Register hook on the model
                             handle = self.model.add_hook(hook_name, hook_fn)
                             handles.append(handle)
                         yield
                     finally:
-                        # Remove hooks
                         for handle in handles:
-                            handle.remove()
+                            if handle is not None:
+                                handle.remove()
 
-                with temporary_hooks(all_hooks):
-                    # Use the underlying HuggingFace model's generate
+                if len(all_hooks) > 0:
+                    input_ids = tokenized_instructions.input_ids.to(self.model.cfg.device)
+
+                    with temporary_hooks(all_hooks):
+                        generation_toks = self.model.generate(
+                            input_ids,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            eos_token_id=generation_config.eos_token_id,
+                            stop_at_eos=True,
+                            prepend_bos=False,
+                            verbose=False,
+                        )
+                else:
+                    input_ids = tokenized_instructions.input_ids.to(self.model.cfg.device)
+
                     generation_toks = self.model.generate(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
+                        input_ids,
                         max_new_tokens=max_new_tokens,
                         do_sample=False,
-                        pad_token_id=generation_config.pad_token_id,
                         eos_token_id=generation_config.eos_token_id,
+                        stop_at_eos=True,
+                        prepend_bos=False,
+                        verbose=False,
                     )
-            else:
-                # No hooks, just generate normally
-                input_ids = tokenized_instructions.input_ids.to(self.model.cfg.device)
-                attention_mask = tokenized_instructions.attention_mask.to(self.model.cfg.device)
 
-                generation_toks = self.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=generation_config.pad_token_id,
-                    eos_token_id=generation_config.eos_token_id,
-                )
+                # Hide token progress after generation completes
+                progress.update(token_task, visible=False)
 
-            # Remove the input tokens from generation
-            generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
+                # Remove the input tokens from generation
+                generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
 
-            # Decode generations
-            for generation_idx, generation in enumerate(generation_toks):
-                completions.append({
-                    'category': categories[i + generation_idx],
-                    'prompt': instructions[i + generation_idx],
-                    'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
-                })
+                # Decode generations
+                for generation_idx, generation in enumerate(generation_toks):
+                    completions.append({
+                        'category': categories[batch_idx + generation_idx],
+                        'prompt': instructions[batch_idx + generation_idx],
+                        'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
+                    })
+
+                # Update batch progress
+                progress.update(batch_task, advance=1)
 
         return completions

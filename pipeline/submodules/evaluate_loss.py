@@ -81,7 +81,9 @@ def batch_iterator_pile(tokenizer, batch_size, max_length):
 
 def compute_loss_over_dataset(model, tokenizer, batch_iterator, n_batches=256, fwd_pre_hooks=[], fwd_hooks=[]):
     device = model.cfg.device
-    accumulated_loss = torch.tensor(0, dtype=torch.float64, device=device)
+    # MPS doesn't support float64, use float32 instead
+    precision_dtype = torch.float32 if device == 'mps' else torch.float64
+    accumulated_loss = torch.tensor(0, dtype=precision_dtype, device=device)
     accumulated_n_tokens = torch.tensor(0, dtype=torch.int64, device=device)
 
     batch_idx = 0

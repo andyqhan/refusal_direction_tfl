@@ -26,11 +26,98 @@ from pipeline.submodules.evaluate_loss import evaluate_loss
 
 console = Console()
 
+def parse_cache_layers_arg(value):
+    """
+    Parse the --cache-layers argument.
+
+    Accepts:
+    - An integer (number of evenly-spaced layers to cache)
+    - "all" (cache all layers - default)
+    - "final" (only cache the final layer)
+    - "threefourths" (only cache the layer at 3L/4)
+    - "half" (only cache the layer at L/2)
+
+    Returns the raw value (int, str, or None) for later processing.
+    """
+    special_values = ["all", "final", "threefourths", "half"]
+
+    if value.lower() in special_values:
+        # Convert "all" to None (which means cache all layers)
+        return None if value.lower() == "all" else value.lower()
+
+    try:
+        int_value = int(value)
+        if int_value <= 0:
+            raise argparse.ArgumentTypeError("--cache-layers must be a positive integer")
+        return int_value
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--cache-layers must be an integer or one of: {', '.join(special_values)}"
+        )
+
+def compute_layers_to_cache(cache_layers_arg, n_layers):
+    """
+    Compute which layers to cache based on the cache_layers argument.
+
+    Args:
+        cache_layers_arg: Either an int or one of ["final", "threefourths", "half"]
+        n_layers: Total number of layers in the model (0-indexed)
+
+    Returns:
+        List of layer indices to cache (0-indexed), or None to cache all layers
+    """
+    if cache_layers_arg is None:
+        # Default: cache all layers
+        return None
+
+    if cache_layers_arg == "final":
+        return [n_layers - 1]
+    elif cache_layers_arg == "threefourths":
+        return [round(3 * n_layers / 4) - 1]
+    elif cache_layers_arg == "half":
+        return [round(n_layers / 2) - 1]
+    elif isinstance(cache_layers_arg, int):
+        # Evenly space the layers
+        # For L=16 and cache_layers=4, we want layers [15, 11, 7, 3]
+        # This means we divide into 4 segments and take the last layer of each segment
+        if cache_layers_arg >= n_layers:
+            # If asking for more layers than exist, just cache all
+            return None
+
+        layers = []
+        for i in range(cache_layers_arg):
+            # Calculate position: we want evenly spaced layers, starting from the end
+            # Segment i goes from layer (i * n_layers / cache_layers_arg) to ((i+1) * n_layers / cache_layers_arg)
+            # We take the last layer of each segment
+            layer = round((i + 1) * n_layers / cache_layers_arg) - 1
+            layers.append(layer)
+
+        # Reverse to get descending order (highest layer first)
+        layers.reverse()
+
+        # Deduplicate while preserving order
+        seen = set()
+        deduped_layers = []
+        for layer in layers:
+            if layer not in seen:
+                seen.add(layer)
+                deduped_layers.append(layer)
+
+        return deduped_layers
+
+    return None
+
 def parse_arguments():
     """Parse model path argument from command line."""
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for processing (default: 1)')
+    parser.add_argument('--ignore-cached-direction', action='store_true',
+                        help='Ignore cached direction and recompute from scratch (default: use cached if available)')
+    parser.add_argument('--cache-layers', type=parse_cache_layers_arg, default='all',
+                        help='Control which layers to cache activations for. Can be an integer (number of evenly-spaced layers), '
+                             '"all" (cache all layers), "final" (only final layer), "threefourths" (layer at 3L/4), or "half" (layer at L/2). '
+                             'Default: "all".')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -121,7 +208,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
 
     return harmful_train, harmless_train, harmful_val, harmless_val
 
-def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train):
+def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train, cache_layers=None):
     """Generate and save candidate directions."""
     console.print("\n")
     console.print(Panel.fit("🧭 Step 3: Generating Candidate Refusal Directions", style="bold cyan"))
@@ -130,12 +217,22 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
         os.makedirs(os.path.join(cfg.artifact_path(), 'generate_directions'))
 
     console.print(f"[cyan]Computing activation differences between {len(harmful_train)} harmful and {len(harmless_train)} harmless examples...[/cyan]")
+
+    # Display cache layers info if specified
+    if cache_layers is not None:
+        layers_to_cache = compute_layers_to_cache(cache_layers, model_base.model.cfg.n_layers)
+        if layers_to_cache:
+            console.print(f"[dim]Caching only {len(layers_to_cache)} layer(s): {layers_to_cache}[/dim]")
+        else:
+            console.print(f"[dim]Caching all {model_base.model.cfg.n_layers} layers[/dim]")
+
     mean_diffs = generate_directions(
         model_base,
         harmful_train,
         harmless_train,
         artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"),
-        batch_size=cfg.batch_size)
+        batch_size=cfg.batch_size,
+        cache_layers=cache_layers)
 
     save_path = os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt')
     torch.save(mean_diffs, save_path)
@@ -143,6 +240,36 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
     console.print(f"[green]✓[/green] Saved to [dim]{save_path}[/dim]")
 
     return mean_diffs
+
+def load_cached_direction_if_exists(cfg):
+    """
+    Load cached direction and metadata if they exist.
+
+    Returns:
+        Tuple of (pos, layer, direction) if cached files exist, otherwise (None, None, None)
+    """
+    direction_path = f'{cfg.artifact_path()}/direction.pt'
+    metadata_path = f'{cfg.artifact_path()}/direction_metadata.json'
+
+    if os.path.exists(direction_path) and os.path.exists(metadata_path):
+        console.print("\n")
+        console.print(Panel.fit("🎯 Step 4: Loading Cached Refusal Direction", style="bold cyan"))
+
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        direction = torch.load(direction_path)
+        pos = metadata['pos']
+        layer = metadata['layer']
+
+        console.print(f"[green]✓[/green] Loaded cached direction at position [bold yellow]{pos}[/bold yellow], layer [bold yellow]{layer}[/bold yellow]")
+        console.print(f"[green]✓[/green] Direction loaded from [dim]{direction_path}[/dim]")
+        console.print(f"[green]✓[/green] Metadata loaded from [dim]{metadata_path}[/dim]")
+        console.print(f"[dim]Tip: Use --ignore-cached-direction to recompute from scratch[/dim]")
+
+        return pos, layer, direction
+
+    return None, None, None
 
 def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions):
     """Select and save the direction."""
@@ -226,7 +353,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 
     console.print(f"  [green]✓[/green] Loss evaluation for [bold]{intervention_label}[/bold]")
 
-def run_pipeline(model_path, batch_size=1):
+def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None):
     """Run the full pipeline."""
     console.print("\n")
     console.print(Panel.fit(
@@ -240,6 +367,8 @@ def run_pipeline(model_path, batch_size=1):
     info_table = Table(show_header=False, box=None, padding=(0, 2))
     info_table.add_row("[bold]Model alias:[/bold]", f"[yellow]{model_alias}[/yellow]")
     info_table.add_row("[bold]Batch size:[/bold]", f"[yellow]{cfg.batch_size}[/yellow]")
+    if cache_layers is not None:
+        info_table.add_row("[bold]Cache layers:[/bold]", f"[yellow]{cache_layers}[/yellow]")
     info_table.add_row("[bold]Artifacts path:[/bold]", f"[dim]{cfg.artifact_path()}[/dim]")
     console.print(info_table)
 
@@ -247,17 +376,24 @@ def run_pipeline(model_path, batch_size=1):
         model_base = construct_model_base(cfg.model_path)
     console.print("[green]✓[/green] Model loaded")
 
-    # Load and sample datasets
-    harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
+    # Try to load cached direction first (unless ignored)
+    pos, layer, direction = None, None, None
+    if not ignore_cached_direction:
+        pos, layer, direction = load_cached_direction_if_exists(cfg)
 
-    # Filter datasets based on refusal scores
-    harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
+    # If no cached direction, compute from scratch
+    if direction is None:
+        # Load and sample datasets
+        harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
 
-    # 1. Generate candidate refusal directions
-    candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
+        # Filter datasets based on refusal scores
+        harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
 
-    # 2. Select the most effective refusal direction
-    pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
+        # 1. Generate candidate refusal directions
+        candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train, cache_layers=cache_layers)
+
+        # 2. Select the most effective refusal direction
+        pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
 
     console.print("\n")
     console.print(Panel.fit("💬 Step 5: Generating Completions on Harmful Datasets", style="bold cyan"))
@@ -321,4 +457,7 @@ def run_pipeline(model_path, batch_size=1):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, batch_size=args.batch_size)
+    # Note: argparse converts hyphens to underscores in attribute names
+    ignore_cached = getattr(args, 'ignore_cached_direction', False)
+    cache_layers = getattr(args, 'cache_layers', None)
+    run_pipeline(model_path=args.model_path, batch_size=args.batch_size, ignore_cached_direction=ignore_cached, cache_layers=cache_layers)
