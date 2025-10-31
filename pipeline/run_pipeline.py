@@ -3,6 +3,7 @@ import random
 import json
 import os
 import argparse
+import time
 
 from rich.console import Console
 from rich.panel import Panel
@@ -130,6 +131,8 @@ def parse_arguments():
                         help='Skip evaluation steps (Steps 6, 8, 9). Only generate completions without evaluating them. (default: run all evaluations)')
     parser.add_argument('--force-regenerate', action='store_true',
                         help='Force regeneration of all completions and evaluations, even if they already exist (default: use cached if valid)')
+    parser.add_argument('--max-new-tokens', type=int, default=512,
+                        help='Maximum number of tokens to generate (default: 512). Reduce this if you hit OOM errors.')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -315,7 +318,12 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
     return pos, layer, direction
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None, force_regenerate=False):
-    """Generate and save completions for a dataset."""
+    """Generate and save completions for a dataset.
+
+    Returns:
+        dict: Statistics about the generation (wallclock_time, num_tokens, tokens_per_sec, num_prompts)
+              Returns None if using cached completions.
+    """
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'completions'))
 
@@ -334,18 +342,37 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
             # Validate: check if we have the right number of completions
             if len(cached_completions) == len(dataset):
                 console.print(f"  [dim]✓ Using cached completions for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold][/dim]")
-                return
+                return None
             else:
                 console.print(f"  [yellow]⚠ Invalid cached file for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold] (expected {len(dataset)}, got {len(cached_completions)}), regenerating[/yellow]")
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             console.print(f"  [yellow]⚠ Corrupted cached file for [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold], regenerating[/yellow]")
 
+    start_time = time.time()
     with console.status(f"[cyan]Generating {len(dataset)} completions for '{dataset_name}' with intervention '{intervention_label}'..."):
         completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens, batch_size=cfg.batch_size)
+    end_time = time.time()
+
+    # Count tokens in completions
+    total_tokens = 0
+    for completion in completions:
+        # Count tokens in the response
+        tokens = model_base.tokenizer.encode(completion['response'], add_special_tokens=False)
+        total_tokens += len(tokens)
+
+    wallclock_time = end_time - start_time
+    tokens_per_sec = total_tokens / wallclock_time if wallclock_time > 0 else 0
 
     with open(save_path, "w") as f:
         json.dump(completions, f, indent=4)
     console.print(f"  [green]✓[/green] Saved [bold]{dataset_name}[/bold] + [bold]{intervention_label}[/bold] completions")
+
+    return {
+        'wallclock_time': wallclock_time,
+        'num_tokens': total_tokens,
+        'tokens_per_sec': tokens_per_sec,
+        'num_prompts': len(dataset)
+    }
 
 def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies, force_regenerate=False):
     """Evaluate completions and save results for a dataset."""
@@ -399,7 +426,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 
     console.print(f"  [green]✓[/green] Loss evaluation for [bold]{intervention_label}[/bold]")
 
-def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None, no_evaluation=False, force_regenerate=False):
+def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_layers=None, eval_datasets=None, eval_methodologies=None, no_evaluation=False, force_regenerate=False, max_new_tokens=512):
     """Run the full pipeline."""
     console.print("\n")
     console.print(Panel.fit(
@@ -426,12 +453,14 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
         model_path=model_path,
         batch_size=batch_size,
         evaluation_datasets=eval_datasets_tuple,
-        jailbreak_eval_methodologies=eval_methodologies_tuple
+        jailbreak_eval_methodologies=eval_methodologies_tuple,
+        max_new_tokens=max_new_tokens
     )
 
     info_table = Table(show_header=False, box=None, padding=(0, 2))
     info_table.add_row("[bold]Model alias:[/bold]", f"[yellow]{model_alias}[/yellow]")
     info_table.add_row("[bold]Batch size:[/bold]", f"[yellow]{cfg.batch_size}[/yellow]")
+    info_table.add_row("[bold]Max new tokens:[/bold]", f"[yellow]{cfg.max_new_tokens}[/yellow]")
     info_table.add_row("[bold]Eval datasets:[/bold]", f"[yellow]{', '.join(cfg.evaluation_datasets)}[/yellow]")
     info_table.add_row("[bold]Eval methodologies:[/bold]", f"[yellow]{', '.join(cfg.jailbreak_eval_methodologies)}[/yellow]")
     if cache_layers is not None:
@@ -444,6 +473,15 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     with console.status("[cyan]Loading model..."):
         model_base = construct_model_base(cfg.model_path)
     console.print("[green]✓[/green] Model loaded")
+
+    # Print device information
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        console.print(f"[cyan]Running on CUDA device:[/cyan] [bold yellow]{device_name}[/bold yellow]")
+    elif torch.backends.mps.is_available():
+        console.print("[cyan]Running on device:[/cyan] [bold yellow]Apple Silicon (MPS)[/bold yellow]")
+    else:
+        console.print("[cyan]Running on device:[/cyan] [bold yellow]CPU[/bold yellow]")
 
     # Try to load cached direction first (unless ignored)
     pos, layer, direction = None, None, None
@@ -478,9 +516,31 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     # 3a. Generate and save completions on harmful evaluation datasets
     for dataset_name in cfg.evaluation_datasets:
         console.print(f"\n[yellow]Processing dataset:[/yellow] [bold]{dataset_name}[/bold]")
-        generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name, force_regenerate=force_regenerate)
-        generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name, force_regenerate=force_regenerate)
-        generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name, force_regenerate=force_regenerate)
+
+        # Collect statistics for each intervention
+        stats = []
+        stats.append(generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name, force_regenerate=force_regenerate))
+        stats.append(generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name, force_regenerate=force_regenerate))
+        stats.append(generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name, force_regenerate=force_regenerate))
+
+        # Print aggregated statistics (only for newly generated completions)
+        stats = [s for s in stats if s is not None]
+        if stats:
+            total_time = sum(s['wallclock_time'] for s in stats)
+            total_tokens = sum(s['num_tokens'] for s in stats)
+            avg_tokens_per_sec = total_tokens / total_time if total_time > 0 else 0
+
+            console.print(f"\n[bold cyan]📊 Performance Statistics for {dataset_name}:[/bold cyan]")
+            perf_table = Table(show_header=True, box=None, padding=(0, 2))
+            perf_table.add_column("Metric", style="dim")
+            perf_table.add_column("Value", style="yellow")
+
+            perf_table.add_row("Total wallclock time", f"{total_time:.1f}s ({total_time/60:.1f} min)")
+            perf_table.add_row("Total tokens generated", f"{total_tokens:,}")
+            perf_table.add_row("Average throughput", f"{avg_tokens_per_sec:.1f} tokens/s")
+            perf_table.add_row("Prompts processed", f"{stats[0]['num_prompts']} × {len(stats)} interventions")
+
+            console.print(perf_table)
 
     # 3b. Evaluate completions and save results on harmful evaluation datasets
     if not no_evaluation:
@@ -502,12 +562,33 @@ def run_pipeline(model_path, batch_size=1, ignore_cached_direction=False, cache_
     with console.status(f"[cyan]Loading {cfg.n_test} harmless test examples..."):
         harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
-    generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate)
+    # Collect statistics for harmless dataset
+    harmless_stats = []
+    harmless_stats.append(generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate))
 
     actadd_refusal_hooks, _ = get_activation_addition_hooks(model_base, direction, +1.0, layer)
     actadd_refusal_pre_hooks = []
 
-    generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate)
+    harmless_stats.append(generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test, force_regenerate=force_regenerate))
+
+    # Print statistics for harmless dataset
+    harmless_stats = [s for s in harmless_stats if s is not None]
+    if harmless_stats:
+        total_time = sum(s['wallclock_time'] for s in harmless_stats)
+        total_tokens = sum(s['num_tokens'] for s in harmless_stats)
+        avg_tokens_per_sec = total_tokens / total_time if total_time > 0 else 0
+
+        console.print(f"\n[bold cyan]📊 Performance Statistics for harmless:[/bold cyan]")
+        perf_table = Table(show_header=True, box=None, padding=(0, 2))
+        perf_table.add_column("Metric", style="dim")
+        perf_table.add_column("Value", style="yellow")
+
+        perf_table.add_row("Total wallclock time", f"{total_time:.1f}s ({total_time/60:.1f} min)")
+        perf_table.add_row("Total tokens generated", f"{total_tokens:,}")
+        perf_table.add_row("Average throughput", f"{avg_tokens_per_sec:.1f} tokens/s")
+        perf_table.add_row("Prompts processed", f"{harmless_stats[0]['num_prompts']} × {len(harmless_stats)} interventions")
+
+        console.print(perf_table)
 
     # 4b. Evaluate completions and save results on harmless evaluation dataset
     if not no_evaluation:
@@ -545,6 +626,7 @@ if __name__ == "__main__":
     eval_methodologies = getattr(args, 'eval_methodologies', None)
     no_evaluation = getattr(args, 'no_evaluation', False)
     force_regenerate = getattr(args, 'force_regenerate', False)
+    max_new_tokens = getattr(args, 'max_new_tokens', 512)
     run_pipeline(
         model_path=args.model_path,
         batch_size=args.batch_size,
@@ -553,5 +635,6 @@ if __name__ == "__main__":
         eval_datasets=eval_datasets,
         eval_methodologies=eval_methodologies,
         no_evaluation=no_evaluation,
-        force_regenerate=force_regenerate
+        force_regenerate=force_regenerate,
+        max_new_tokens=max_new_tokens
     )

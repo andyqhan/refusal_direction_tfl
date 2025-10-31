@@ -82,10 +82,9 @@ def get_all_direction_ablation_hooks(
     """
     Generate hook specifications for ablating a direction across all layers.
 
-    In the original implementation, ablation hooks are applied to:
-    - Residual stream at the start of each block (hook_resid_pre)
-    - Attention outputs (hook_result)
-    - MLP outputs (hook_mlp_out)
+    Ablation hooks are applied to the residual stream at the start of each block (hook_resid_pre).
+    This removes the direction from the residual stream before attention and MLP computations,
+    which is sufficient to prevent the model from using the direction for computation.
 
     Args:
         model_base: The model instance

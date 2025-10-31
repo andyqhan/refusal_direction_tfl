@@ -118,6 +118,7 @@ def plot_refusal_scores(
     title: str,
     artifact_dir: str,
     artifact_name: str,
+    y_label: str = 'Refusal score',
 ):
     n_pos, n_layer = refusal_scores.shape
 
@@ -141,7 +142,7 @@ def plot_refusal_scores(
 
     ax.set_title(title)
     ax.set_xlabel('Layer source of direction (resid_pre)')
-    ax.set_ylabel('Refusal score')
+    ax.set_ylabel(y_label)
     ax.legend(title='Position source of direction', loc='lower left')
 
     plt.savefig(f"{artifact_dir}/{artifact_name}.png")
@@ -254,7 +255,8 @@ def select_direction(
         token_labels=model_base.tokenizer.batch_decode(model_base.eoi_toks),
         title='KL Divergence when ablating direction on harmless instructions',
         artifact_dir=artifact_dir,
-        artifact_name='kl_div_scores'
+        artifact_name='kl_div_scores',
+        y_label='KL Divergence'
     )
 
     filtered_scores = []
