@@ -4,3 +4,5 @@ __pycache__/
 venv
 pipeline/runs/
 TransformerLens_docs/
+gsm8k_dataset/processed_data
+**/.ipynb_checkpoints
