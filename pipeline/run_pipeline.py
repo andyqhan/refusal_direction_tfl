@@ -19,6 +19,7 @@ def parse_arguments():
     """Parse model path argument from command line."""
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    parser.add_argument('--generation-only', action='store_true', help='Only run the direction generation phase, skip selection and evaluation')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -133,7 +134,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
-def run_pipeline(model_path):
+def run_pipeline(model_path, generation_only=False):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)
     cfg = Config(model_alias=model_alias, model_path=model_path)
@@ -142,13 +143,17 @@ def run_pipeline(model_path):
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
-    
+
     # Filter datasets based on refusal scores
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
 
     # 1. Generate candidate refusal directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
-    
+
+    if generation_only:
+        print(f"Generation complete. Candidate directions saved to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
+        return
+
     # 2. Select the most effective refusal direction
     pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
 
@@ -187,4 +192,4 @@ def run_pipeline(model_path):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path)
+    run_pipeline(model_path=args.model_path, generation_only=args.generation_only)
