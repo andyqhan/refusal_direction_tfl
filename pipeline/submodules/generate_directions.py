@@ -7,7 +7,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from pipeline.utils.hook_utils import add_hooks
-from pipeline.utils.device_utils import clear_device_cache
+from pipeline.utils.device_utils import clear_device_cache, get_computation_dtype
 from pipeline.model_utils.model_base import ModelBase
 
 def get_mean_activations_pre_hook(layer, cache: Float[Tensor, "pos layer d_model"], n_samples, positions: List[int]):
@@ -25,7 +25,8 @@ def get_mean_activations(model, tokenizer, instructions, tokenize_instructions_f
     d_model = model.config.hidden_size
 
     # we store the mean activations in high-precision to avoid numerical issues
-    mean_activations = torch.zeros((n_positions, n_layers, d_model), dtype=torch.float64, device=model.device)
+    computation_dtype = get_computation_dtype(model.device)
+    mean_activations = torch.zeros((n_positions, n_layers, d_model), dtype=computation_dtype, device=model.device)
 
     fwd_pre_hooks = [(block_modules[layer], get_mean_activations_pre_hook(layer=layer, cache=mean_activations, n_samples=n_samples, positions=positions)) for layer in range(n_layers)]
 

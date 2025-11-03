@@ -54,3 +54,29 @@ def clear_device_cache(device: torch.device) -> None:
     elif device_type == 'mps':
         torch.mps.empty_cache()
         # Note: MPS doesn't have synchronize() as of PyTorch 2.x
+
+
+def get_computation_dtype(device: torch.device) -> torch.dtype:
+    """
+    Get appropriate high-precision dtype for the given device.
+
+    MPS (Apple Silicon) doesn't support float64, so we use float32 instead.
+    CUDA and CPU can use float64 for better numerical precision.
+
+    Args:
+        device: PyTorch device object (can be from model.device or tensor.device)
+
+    Returns:
+        torch.float64 for CUDA/CPU (full precision)
+        torch.float32 for MPS (MPS limitation)
+    """
+    device_type = device.type if hasattr(device, 'type') else str(device).split(':')[0]
+
+    if device_type == 'mps':
+        logger.warning(
+            "MPS device detected: using float32 instead of float64 for high-precision computations. "
+            "This may slightly affect numerical precision compared to CUDA devices."
+        )
+        return torch.float32
+    else:
+        return torch.float64

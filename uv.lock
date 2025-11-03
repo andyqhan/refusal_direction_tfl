@@ -2404,6 +2404,7 @@ dependencies = [
     { name = "einops" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "ipykernel" },
     { name = "ipython", version = "8.37.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2436,11 +2437,12 @@ hpc = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", specifier = ">=0.31.0" },
+    { name = "accelerate", specifier = ">=0.35.0" },
     { name = "datasets", specifier = ">=2.19.0" },
     { name = "einops", specifier = ">=0.8.0" },
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "huggingface-hub", specifier = ">=0.32.0" },
     { name = "ipykernel", specifier = ">=6.29.0" },
     { name = "ipython", specifier = ">=8.25.0" },
     { name = "jaxtyping", specifier = ">=0.2.29" },
@@ -2452,7 +2454,7 @@ requires-dist = [
     { name = "outlines", specifier = ">=0.0.43" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "ray", marker = "extra == 'hpc'", specifier = ">=2.24.0" },
-    { name = "safetensors", specifier = ">=0.4.3" },
+    { name = "safetensors", specifier = ">=0.4.5" },
     { name = "sentencepiece", specifier = ">=0.2.0" },
     { name = "tiktoken", specifier = ">=0.7.0" },
     { name = "tokenizers", specifier = ">=0.19.1" },

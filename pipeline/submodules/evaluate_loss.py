@@ -5,6 +5,7 @@ import json
 from datasets import load_dataset
 
 from pipeline.utils.hook_utils import add_hooks
+from pipeline.utils.device_utils import get_computation_dtype
 from pipeline.model_utils.model_base import ModelBase
 
 def batch_iterator_chat_completions(dataset_instructions, dataset_outputs, tokenize_instructions_fn, batch_size, eoi_toks):
@@ -80,7 +81,8 @@ def batch_iterator_pile(tokenizer, batch_size, max_length):
         yield inputs, loss_mask
 
 def compute_loss_over_dataset(model, tokenizer, batch_iterator, n_batches=256, fwd_pre_hooks=[], fwd_hooks=[]):
-    accumulated_loss = torch.tensor(0, dtype=torch.float64, device=model.device)
+    computation_dtype = get_computation_dtype(model.device)
+    accumulated_loss = torch.tensor(0, dtype=computation_dtype, device=model.device)
     accumulated_n_tokens = torch.tensor(0, dtype=torch.int64, device=model.device)
 
     batch_idx = 0

@@ -13,13 +13,15 @@ from einops import rearrange
 
 from pipeline.model_utils.model_base import ModelBase
 from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_pre_hook, get_direction_ablation_input_pre_hook, get_direction_ablation_output_hook
+from pipeline.utils.device_utils import get_computation_dtype
 
 def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
     epsilon: Float = 1e-8,
 ):
-    logits = logits.to(torch.float64)
+    computation_dtype = get_computation_dtype(logits.device)
+    logits = logits.to(computation_dtype)
 
     # we only care about the last tok position
     logits = logits[:, -1, :]
@@ -133,9 +135,10 @@ def select_direction(
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
     baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
 
-    ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
-    ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
-    steering_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
+    computation_dtype = get_computation_dtype(model_base.model.device)
+    ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=computation_dtype)
+    ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=computation_dtype)
+    steering_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=computation_dtype)
 
     baseline_harmless_logits = get_last_position_logits(
         model=model_base.model,
@@ -312,8 +315,9 @@ def kl_div_fn(
     """
     Compute the KL divergence loss between two tensors of logits.
     """
-    logits_a = logits_a.to(torch.float64)
-    logits_b = logits_b.to(torch.float64)
+    computation_dtype = get_computation_dtype(logits_a.device)
+    logits_a = logits_a.to(computation_dtype)
+    logits_b = logits_b.to(computation_dtype)
 
     probs_a = logits_a.softmax(dim=-1)
     probs_b = logits_b.softmax(dim=-1)
