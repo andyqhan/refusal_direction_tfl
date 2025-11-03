@@ -143,12 +143,32 @@ fi
 # Install Python dependencies inside the container overlay
 # -----------------------------------------------------------------------------
 
+# Detect uv location on host system
+UV_PATH=$(which uv 2>/dev/null || echo "$HOME/.local/bin/uv")
+if [ ! -x "$UV_PATH" ]; then
+    echo "WARNING: uv not found at $UV_PATH. Trying common locations..."
+    for loc in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "/usr/local/bin/uv"; do
+        if [ -x "$loc" ]; then
+            UV_PATH="$loc"
+            break
+        fi
+    done
+fi
+
+if [ ! -x "$UV_PATH" ]; then
+    echo "ERROR: uv not found. Please install it first:"
+    echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+
+echo "Found uv at: $UV_PATH"
 echo "Installing Python environment inside Singularity overlay..."
 singularity exec \
     --overlay "${OVERLAY_PATH}:rw" \
     --env PROJECT_DIR="$PROJECT_DIR" \
     --env CONDA_ENV_NAME="$CONDA_ENV_NAME" \
     --env CONTAINER_PIP_CACHE="$CONTAINER_PIP_CACHE" \
+    --env UV_PATH="$UV_PATH" \
     "${SINGULARITY_IMAGE}" /bin/bash <<'EOF'
 set -e
 MINIFORGE_DIR=/ext3/miniforge3
@@ -202,7 +222,8 @@ export PIP_CACHE_DIR
 
 # Use uv to install dependencies from pyproject.toml (locked via uv.lock)
 # Install with [hpc] extras for GPU-specific packages (vllm, xformers, etc.)
-uv pip install -e "$PROJECT_DIR[hpc]" --locked
+# UV_PATH is passed from the host system
+"$UV_PATH" pip install -e "$PROJECT_DIR[hpc]" --locked
 EOF
 
 echo "=================================================="
