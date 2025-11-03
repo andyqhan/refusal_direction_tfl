@@ -1,0 +1,67 @@
+[project]
+name = "refusal-direction-tfl"
+version = "0.1.0"
+description = "Refusal direction extraction using TransformerLens"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Core ML frameworks
+    "torch>=2.3.0",
+    "transformers>=4.51.0",
+    "accelerate>=0.31.0",
+    "datasets>=2.19.0",
+    "safetensors>=0.4.3",
+    "tokenizers>=0.19.1",
+
+    # Utilities
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "tqdm>=4.66.0",
+    "einops>=0.8.0",
+    "jaxtyping>=0.2.29",
+
+    # API and web
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+    "httpx>=0.27.0",
+    "openai>=1.33.0",
+    "litellm>=1.40.0",
+
+    # Additional tools
+    "matplotlib>=3.9.0",
+    "ipython>=8.25.0",
+    "ipykernel>=6.29.0",
+    "sentencepiece>=0.2.0",
+    "tiktoken>=0.7.0",
+
+    # Structured generation
+    "outlines>=0.0.43",
+    "lm-format-enforcer>=0.10.1",
+]
+
+[project.optional-dependencies]
+# HPC/GPU-specific dependencies (Linux x86_64 with CUDA)
+hpc = [
+    "vllm>=0.5.0",
+    "ray>=2.24.0",
+    "vllm-flash-attn>=2.5.9",
+    "xformers>=0.0.26",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipeline", "dataset"]
+
+[tool.uv]
+# Generate lockfiles but allow installation into existing environments (like conda)
+# This provides reproducibility while remaining compatible with HPC conda setups
+
+[tool.uv.pip]
+# Allow using pre-built wheels to speed up installation
+index-strategy = "unsafe-best-match"
+
+[tool.hatch.metadata]
+allow-direct-references = true

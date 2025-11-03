@@ -10,14 +10,47 @@ In the spirit of scientific reproducibility, we provide code to reproduce the ma
 
 ## Setup
 
+This project uses **`uv`** for fast, reproducible dependency management. Install `uv` following the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
+
+### Local Development (macOS/Linux)
+
 ```bash
 git clone https://github.com/andyrdt/refusal_direction.git
 cd refusal_direction
-source setup.sh
+
+# Install dependencies (uses pyproject.toml and uv.lock)
+uv pip install -e .
 ```
 
-The setup script will prompt you for a HuggingFace token (required to access gated models) and a Together AI token (required to access the Together AI API, which is used for evaluating jailbreak safety scores).
-It will then set up a virtual environment and install the required packages.
+**Note**: GPU-specific packages (vllm, xformers) are not included in local installation as they don't support macOS. For HPC/Linux GPU environments, see below.
+
+### HPC Setup (NYU Greene)
+
+For running on HPC with GPU support, see detailed instructions in [`hpc/README.md`](hpc/README.md). The HPC setup uses a Singularity/Conda environment and installs all GPU-specific dependencies.
+
+### Environment Variables (Optional)
+
+Set these for accessing gated models and evaluation APIs:
+
+```bash
+export HF_TOKEN='your_huggingface_token_here'        # For gated models (e.g., Llama)
+export TOGETHER_API_KEY='your_together_api_key_here' # For jailbreak safety evaluation
+```
+
+### Updating Dependencies
+
+When package versions need updating (e.g., upgrading transformers):
+
+```bash
+# 1. Edit pyproject.toml to change version constraints
+# 2. Regenerate lock file
+uv lock
+
+# 3. Reinstall with new versions
+uv pip install -e .
+```
+
+The `uv.lock` file ensures reproducible installations across all environments.
 
 ## Reproducing main results
 

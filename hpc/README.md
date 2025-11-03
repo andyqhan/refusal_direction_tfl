@@ -2,6 +2,17 @@
 
 This directory contains scripts and instructions for running the refusal direction pipeline on NYU's Greene HPC cluster.
 
+## Dependency Management with `uv`
+
+This project uses **`uv`** for fast, reproducible dependency management:
+
+- **`pyproject.toml`**: Defines all project dependencies
+- **`uv.lock`**: Locks exact versions for reproducibility
+- **Benefits**:
+  - Much faster than pip
+  - Guaranteed reproducible installs
+  - Easy to upgrade packages (just `uv lock` after updating pyproject.toml)
+
 ## Prerequisites
 
 1. **Greene Access**: Ensure you have an active NYU HPC account and can SSH to Greene
@@ -47,8 +58,8 @@ bash hpc/setup_greene.sh
 This will:
 - Create directory structure in `/scratch/ah7660/refusal_direction_tfl/`
 - Copy code to scratch
-- Create Python virtual environment
-- Install all dependencies
+- Create Conda environment in Singularity overlay
+- Install all dependencies using `uv` (including GPU-specific packages)
 
 ### Step 2: Configure Environment Variables (Optional)
 
@@ -369,6 +380,43 @@ exit
 5. **Email Notifications**: Update email in SLURM script to get notified when jobs complete
 
 6. **Right-size Resources**: Don't request more than you need - it increases queue time
+
+## Updating Dependencies
+
+When you need to upgrade packages (e.g., bumping transformers to a newer version):
+
+### Local Development
+```bash
+# 1. Edit pyproject.toml to update version constraints
+# 2. Regenerate lock file
+uv lock
+
+# 3. Install updated packages locally
+uv pip install -e .
+
+# 4. Commit both pyproject.toml and uv.lock
+git add pyproject.toml uv.lock
+git commit -m "Update dependencies"
+```
+
+### On HPC
+```bash
+# 1. Pull latest changes (includes updated pyproject.toml and uv.lock)
+cd ~/refusal_direction_tfl
+git pull
+
+# 2. Sync to scratch and reinstall
+rsync -av --exclude='.git' --exclude='venv' --exclude='__pycache__' \
+    ~/refusal_direction_tfl/ /scratch/ah7660/refusal_direction_tfl/code/
+
+# 3. Reinstall with updated lock file
+cd /scratch/ah7660/refusal_direction_tfl/code
+singularity exec --overlay /scratch/ah7660/overlay-25GB-500K.ext3:rw \
+    /scratch/work/public/singularity/cuda12.6.3-cudnn9.5.1-ubuntu22.04.5.sif \
+    /bin/bash -c 'source /ext3/env.sh && uv pip install -e .[hpc] --locked'
+```
+
+The `--locked` flag ensures that the exact versions from `uv.lock` are installed, preventing dependency conflicts.
 
 ## Additional Resources
 

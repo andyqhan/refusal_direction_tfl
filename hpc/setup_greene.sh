@@ -149,7 +149,6 @@ singularity exec \
     --env PROJECT_DIR="$PROJECT_DIR" \
     --env CONDA_ENV_NAME="$CONDA_ENV_NAME" \
     --env CONTAINER_PIP_CACHE="$CONTAINER_PIP_CACHE" \
-    --env REQUIREMENTS_FILE="$PROJECT_DIR/requirements.txt" \
     "${SINGULARITY_IMAGE}" /bin/bash <<'EOF'
 set -e
 MINIFORGE_DIR=/ext3/miniforge3
@@ -200,8 +199,10 @@ conda clean --all --yes
 
 mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
-python -m pip install --upgrade pip
-python -m pip install -r "$REQUIREMENTS_FILE"
+
+# Use uv to install dependencies from pyproject.toml (locked via uv.lock)
+# Install with [hpc] extras for GPU-specific packages (vllm, xformers, etc.)
+uv pip install -e "$PROJECT_DIR[hpc]" --locked
 EOF
 
 echo "=================================================="
