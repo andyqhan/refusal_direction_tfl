@@ -3,10 +3,9 @@ import json
 import os
 import gc
 import numpy as np
+import platform
 
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
-from vllm.distributed.parallel_state import destroy_model_parallel
 import torch
 import litellm
 import time
@@ -149,6 +148,16 @@ def llamaguard2_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
 
 # taken from https://github.com/centerforaisafety/HarmBench/blob/main/evaluate_completions.py#L65
 def harmbench_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
+    # vLLM is not well-supported on macOS, so we raise an error instead
+    if platform.system() == "Darwin":
+        raise RuntimeError(
+            "HarmBench evaluation using vLLM is not supported on macOS. "
+            "Please use 'substring_matching' or 'llamaguard2' methodologies instead."
+        )
+
+    # Import vLLM only when needed (not on macOS)
+    from vllm import LLM, SamplingParams
+    from vllm.distributed.parallel_state import destroy_model_parallel
 
     classifier = LLM(model='cais/HarmBench-Llama-2-13b-cls', tensor_parallel_size=1)
     classifier.llm_engine.tokenizer.truncation_side = "left"

@@ -4,7 +4,7 @@ import json
 import os
 import argparse
 
-from dataset.load_dataset import load_dataset_split, load_dataset
+from dataset.load_dataset import load_dataset_split, load_dataset, load_gsm8k_dataset, sample_gsm8k_data
 
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
@@ -24,66 +24,49 @@ def parse_arguments():
 
 def load_and_sample_datasets(cfg):
     """
-    Load datasets and sample them based on the configuration.
+    Load GSM8K dataset and sample for training and validation.
 
     Returns:
-        Tuple of datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
+        Tuple of datasets: (perturbed_train, baseline_train, perturbed_val, baseline_val)
+        Each dataset contains chat-formatted samples: [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     """
     random.seed(42)
-    harmful_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
-    harmless_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
-    harmful_val = random.sample(load_dataset_split(harmtype='harmful', split='val', instructions_only=True), cfg.n_val)
-    harmless_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
-    return harmful_train, harmless_train, harmful_val, harmless_val
 
-def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
-    """
-    Filter datasets based on refusal scores.
+    # Load the full GSM8K dataset
+    gsm8k_dataset = load_gsm8k_dataset()
 
-    Returns:
-        Filtered datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
-    """
-    def filter_examples(dataset, scores, threshold, comparison):
-        return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
+    # Sample training data (uniformly from all perturbation types)
+    baseline_train, perturbed_train = sample_gsm8k_data(gsm8k_dataset, cfg.n_train)
 
-    if cfg.filter_train:
-        harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
-        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+    # Sample validation data (uniformly from all perturbation types)
+    baseline_val, perturbed_val = sample_gsm8k_data(gsm8k_dataset, cfg.n_val)
 
-    if cfg.filter_val:
-        harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
-        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
-    
-    return harmful_train, harmless_train, harmful_val, harmless_val
+    return perturbed_train, baseline_train, perturbed_val, baseline_val
 
-def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train):
+def generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train):
     """Generate and save candidate directions."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_directions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'generate_directions'))
 
     mean_diffs = generate_directions(
         model_base,
-        harmful_train,
-        harmless_train,
+        perturbed_train,
+        baseline_train,
         artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"))
 
     torch.save(mean_diffs, os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt'))
 
     return mean_diffs
 
-def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions):
+def select_and_save_direction(cfg, model_base, perturbed_val, baseline_val, candidate_directions):
     """Select and save the direction."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
 
     pos, layer, direction = select_direction(
         model_base,
-        harmful_val,
-        harmless_val,
+        perturbed_val,
+        baseline_val,
         candidate_directions,
         artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
     )
@@ -142,53 +125,59 @@ def run_pipeline(model_path, generation_only=False):
     model_base = construct_model_base(cfg.model_path)
 
     # Load and sample datasets
-    harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
+    perturbed_train, baseline_train, perturbed_val, baseline_val = load_and_sample_datasets(cfg)
 
-    # Filter datasets based on refusal scores
-    harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
-
-    # 1. Generate candidate refusal directions
-    candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
+    # 1. Generate candidate correction directions
+    candidate_directions = generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train)
 
     if generation_only:
         print(f"Generation complete. Candidate directions saved to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
         return
 
-    # 2. Select the most effective refusal direction
-    pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
+    # 2. Select the most effective correction direction
+    pos, layer, direction = select_and_save_direction(cfg, model_base, perturbed_val, baseline_val, candidate_directions)
 
-    baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
-    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_direction_ablation_hooks(model_base, direction)
-    actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_input_pre_hook(vector=direction, coeff=-1.0))], []
+    print(f"Direction extraction complete!")
+    print(f"Selected direction: pos={pos}, layer={layer}")
+    print(f"Direction saved to {cfg.artifact_path()}/direction.pt")
 
-    # 3a. Generate and save completions on harmful evaluation datasets
-    for dataset_name in cfg.evaluation_datasets:
-        generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
-        generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
-        generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
+    # EVALUATION CODE (DISABLED BY DEFAULT)
+    # Uncomment the sections below to run evaluation on the extracted direction
+    # Note: The evaluation code below is designed for refusal/jailbreak tasks
+    # and may need adaptation for GSM8K correction tasks
 
-    # 3b. Evaluate completions and save results on harmful evaluation datasets
-    for dataset_name in cfg.evaluation_datasets:
-        evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-        evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-        evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
-    
-    # 4a. Generate and save completions on harmless evaluation dataset
-    harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
+    # baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
+    # ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_direction_ablation_hooks(model_base, direction)
+    # actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_input_pre_hook(vector=direction, coeff=-1.0))], []
 
-    generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
-    
-    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_input_pre_hook(vector=direction, coeff=+1.0))], []
-    generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
+    # # 3a. Generate and save completions on harmful evaluation datasets
+    # for dataset_name in cfg.evaluation_datasets:
+    #     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
+    #     generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
+    #     generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
 
-    # 4b. Evaluate completions and save results on harmless evaluation dataset
-    evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
-    evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+    # # 3b. Evaluate completions and save results on harmful evaluation datasets
+    # for dataset_name in cfg.evaluation_datasets:
+    #     evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+    #     evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
+    #     evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
 
-    # 5. Evaluate loss on harmless datasets
-    evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
-    evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
-    evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+    # # 4a. Generate and save completions on harmless evaluation dataset
+    # harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
+
+    # generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
+
+    # actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_input_pre_hook(vector=direction, coeff=+1.0))], []
+    # generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
+
+    # # 4b. Evaluate completions and save results on harmless evaluation dataset
+    # evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+    # evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
+
+    # # 5. Evaluate loss on harmless datasets
+    # evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
+    # evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
+    # evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
 
 if __name__ == "__main__":
     args = parse_arguments()

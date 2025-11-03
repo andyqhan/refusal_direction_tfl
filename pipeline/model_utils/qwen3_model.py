@@ -60,16 +60,33 @@ def tokenize_instructions_qwen3_chat(
     system: str=None,
     include_trailing_whitespace=True,
 ):
-    if outputs is not None:
+    """
+    Tokenize instructions using chat templates.
+
+    Args:
+        instructions: Can be either:
+            - List of strings (legacy format) - will use old template formatting
+            - List of chat dicts [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
+    """
+    # Check if instructions are already in chat format
+    if instructions and isinstance(instructions[0], list):
+        # New chat format: use apply_chat_template
         prompts = [
-            format_instruction_qwen3_chat(instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
-            for instruction, output in zip(instructions, outputs)
+            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=False)
+            for chat in instructions
         ]
     else:
-        prompts = [
-            format_instruction_qwen3_chat(instruction=instruction, system=system, include_trailing_whitespace=include_trailing_whitespace)
-            for instruction in instructions
-        ]
+        # Legacy format: use old template formatting
+        if outputs is not None:
+            prompts = [
+                format_instruction_qwen3_chat(instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
+                for instruction, output in zip(instructions, outputs)
+            ]
+        else:
+            prompts = [
+                format_instruction_qwen3_chat(instruction=instruction, system=system, include_trailing_whitespace=include_trailing_whitespace)
+                for instruction in instructions
+            ]
 
     result = tokenizer(
         prompts,

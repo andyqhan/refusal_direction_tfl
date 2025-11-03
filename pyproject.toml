@@ -8,9 +8,9 @@ dependencies = [
     # Core ML frameworks
     "torch>=2.3.0",
     "transformers>=4.51.0",
-    "accelerate>=0.31.0",
+    "accelerate>=0.35.0",
     "datasets>=2.19.0",
-    "safetensors>=0.4.3",
+    "safetensors>=0.4.5",
     "tokenizers>=0.19.1",
 
     # Utilities
@@ -19,6 +19,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "einops>=0.8.0",
     "jaxtyping>=0.2.29",
+    "huggingface_hub>=0.32.0",
 
     # API and web
     "fastapi>=0.111.0",
