@@ -1,6 +1,7 @@
 
 import torch
 import functools
+import logging
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List
@@ -9,6 +10,8 @@ from jaxtyping import Int, Float
 
 from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
+
+logger = logging.getLogger(__name__)
 
 # Llama 2 chat templates are based on
 # - https://github.com/centerforaisafety/HarmBench/blob/main/baselines/model_utils.py
@@ -97,7 +100,11 @@ class Llama2Model(ModelBase):
             device_map="auto",
         ).eval()
 
-        model.requires_grad_(False) 
+        model.requires_grad_(False)
+
+        # Log device information
+        device = model.device
+        logger.info(f"Llama-2 model loaded on device: {device}")
 
         return model
 

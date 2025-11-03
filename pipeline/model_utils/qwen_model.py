@@ -1,6 +1,7 @@
 
 import torch
 import functools
+import logging
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -10,6 +11,8 @@ from jaxtyping import Int, Float
 
 from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
+
+logger = logging.getLogger(__name__)
 
 # Qwen chat templates are based on
 # - Official examples from Qwen repo: https://github.com/QwenLM/Qwen/blob/5aa84bdfd3237b37f01bc88cd49b3279b9a71d0b/examples/vllm_wrapper.py#L32
@@ -113,7 +116,11 @@ class QwenModel(ModelBase):
             **model_kwargs,
         ).eval()
 
-        model.requires_grad_(False) 
+        model.requires_grad_(False)
+
+        # Log device information
+        device = model.device
+        logger.info(f"Qwen model loaded on device: {device}")
 
         return model
 

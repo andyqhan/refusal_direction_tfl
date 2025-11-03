@@ -1,6 +1,7 @@
 
 import torch
 import functools
+import logging
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -9,6 +10,8 @@ from jaxtyping import Float
 
 from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
+
+logger = logging.getLogger(__name__)
 
 # Yi chat templates are based on
 # - Official tokenizer config: https://huggingface.co/01-ai/Yi-6B-Chat/blob/main/tokenizer_config.json
@@ -104,7 +107,11 @@ class YiModel(ModelBase):
             device_map="auto",
         ).eval()
 
-        model.requires_grad_(False) 
+        model.requires_grad_(False)
+
+        # Log device information
+        device = model.device
+        logger.info(f"Yi model loaded on device: {device}")
 
         return model
 

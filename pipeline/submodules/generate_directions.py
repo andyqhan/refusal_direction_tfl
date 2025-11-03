@@ -7,6 +7,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from pipeline.utils.hook_utils import add_hooks
+from pipeline.utils.device_utils import clear_device_cache
 from pipeline.model_utils.model_base import ModelBase
 
 def get_mean_activations_pre_hook(layer, cache: Float[Tensor, "pos layer d_model"], n_samples, positions: List[int]):
@@ -16,7 +17,7 @@ def get_mean_activations_pre_hook(layer, cache: Float[Tensor, "pos layer d_model
     return hook_fn
 
 def get_mean_activations(model, tokenizer, instructions, tokenize_instructions_fn, block_modules: List[torch.nn.Module], batch_size=32, positions=[-1]):
-    torch.cuda.empty_cache()
+    clear_device_cache(model.device)
 
     n_positions = len(positions)
     n_layers = model.config.num_hidden_layers

@@ -11,6 +11,8 @@ import torch
 import litellm
 import time
 
+from pipeline.utils.device_utils import clear_device_cache
+
 # based on https://github.com/JailbreakBench/jailbreakbench/blob/4dbcc097739dd684fbf789cc3d4f97372bd72851/src/jailbreakbench/classifier.py
 # augmented with some additional prefixes
 _test_prefixes_jailbreakbench = [
@@ -170,9 +172,13 @@ def harmbench_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
 
     del classifier
     gc.collect()
+
+    # Clear device cache (works for both CUDA and MPS)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
     return classifications
 
