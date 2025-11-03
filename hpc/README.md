@@ -413,10 +413,10 @@ rsync -av --exclude='.git' --exclude='venv' --exclude='__pycache__' \
 cd /scratch/ah7660/refusal_direction_tfl/code
 singularity exec --overlay /scratch/ah7660/overlay-25GB-500K.ext3:rw \
     /scratch/work/public/singularity/cuda12.6.3-cudnn9.5.1-ubuntu22.04.5.sif \
-    /bin/bash -c 'source /ext3/env.sh && uv pip install -e .[hpc] --locked'
+    /bin/bash -c 'source /ext3/env.sh && uv pip install -e .[hpc]'
 ```
 
-The `--locked` flag ensures that the exact versions from `uv.lock` are installed, preventing dependency conflicts.
+`uv` automatically uses `uv.lock` when it's present, ensuring that the exact versions are installed and preventing dependency conflicts.
 
 ## Additional Resources
 

@@ -220,10 +220,11 @@ conda clean --all --yes
 mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
 
-# Use uv to install dependencies from pyproject.toml (locked via uv.lock)
+# Use uv to install dependencies from pyproject.toml
+# uv automatically uses uv.lock for reproducible installations
 # Install with [hpc] extras for GPU-specific packages (vllm, xformers, etc.)
 # UV_PATH is passed from the host system
-"$UV_PATH" pip install -e "$PROJECT_DIR[hpc]" --locked
+"$UV_PATH" pip install -e "$PROJECT_DIR[hpc]"
 EOF
 
 echo "=================================================="
