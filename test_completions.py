@@ -32,7 +32,7 @@ import torch
 # except RuntimeError:
 #     pass  # Already set
 
-from dataset.load_dataset import load_gsm8k_dataset
+from datasets import load_dataset as hf_load_dataset
 from pipeline.model_utils.model_factory import construct_model_base
 from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook
 
@@ -60,6 +60,10 @@ def parse_arguments():
                         help='Path to save completions JSON (prints to stdout if not specified)')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for generation')
+    parser.add_argument('--split', type=str, default='test', choices=['train', 'test'],
+                        help='Which GSM8K split to sample from')
+    parser.add_argument('--n_samples', type=int, default=50,
+                        help='Number of samples to test')
 
     return parser.parse_args()
 
@@ -105,19 +109,24 @@ def load_direction_vector(mean_diffs_path, pos, layer):
     return direction, mean_diffs_shape
 
 
-def sample_gsm8k_questions(n_samples=50, seed=74):
+def sample_gsm8k_questions(n_samples=50, seed=74, split='test'):
     """
     Sample questions from GSM8K dataset.
+
+    Args:
+        n_samples: Number of samples to return
+        seed: Random seed for sampling
+        split: Which split to use ('train' or 'test')
 
     Returns:
         List of dicts formatted for generate_completions with 'instruction' and 'category' keys
     """
-    print(f"\nLoading GSM8K dataset and sampling {n_samples} questions (seed={seed})")
+    print(f"\nLoading GSM8K {split} set and sampling {n_samples} questions (seed={seed})")
 
-    # Load dataset
-    dataset = load_gsm8k_dataset()
-    total_samples = len(dataset['question'])
-    print(f"Total GSM8K samples: {total_samples}")
+    # Load the raw GSM8K dataset from HuggingFace
+    dataset = hf_load_dataset("openai/gsm8k", "main", split=split)
+    total_samples = len(dataset)
+    print(f"Total GSM8K {split} samples: {total_samples}")
 
     # Sample indices
     random.seed(seed)
@@ -128,29 +137,21 @@ def sample_gsm8k_questions(n_samples=50, seed=74):
 
     # Format for generate_completions
     # The generate_completions method expects a list of dicts with 'instruction' and 'category' keys
-    # However, 'instruction' should now be in chat format (list of chat dicts)
+    # 'instruction' should be in chat format (list of chat dicts)
     formatted_dataset = []
 
     for idx in indices:
-        question = dataset['question'][idx]
-        perturbation_type = dataset['perturbation_type'][idx]
+        question = dataset[idx]['question']
 
         # Format as chat (just the question, no answer - we want the model to generate)
         chat_format = [{"role": "user", "content": question}]
 
         formatted_dataset.append({
             'instruction': chat_format,
-            'category': perturbation_type
+            'category': 'gsm8k_test'  # Use a generic category since test set doesn't have perturbation types
         })
 
-    print(f"Sampled {len(formatted_dataset)} questions")
-
-    # Print distribution of perturbation types
-    from collections import Counter
-    type_counts = Counter([item['category'] for item in formatted_dataset])
-    print("Perturbation type distribution:")
-    for ptype, count in sorted(type_counts.items()):
-        print(f"  {ptype}: {count}")
+    print(f"Sampled {len(formatted_dataset)} questions from {split} set")
 
     return formatted_dataset
 
@@ -244,7 +245,7 @@ def main():
     )
 
     # Sample GSM8K questions
-    dataset = sample_gsm8k_questions(n_samples=10, seed=74)
+    dataset = sample_gsm8k_questions(n_samples=args.n_samples, seed=74, split=args.split)
 
     # Generate completions with intervention
     completions = generate_with_intervention(
@@ -267,6 +268,7 @@ def main():
         "coeff": args.coeff,
         "max_new_tokens": args.max_new_tokens,
         "batch_size": args.batch_size,
+        "split": args.split,
         "num_samples": len(completions)
     }
 
