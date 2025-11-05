@@ -5,11 +5,15 @@ This script loads the modified GSM8K dataset, uses the perturbed_answer as a
 token-forced prefix, and generates continuations to see what the model does naturally.
 """
 
+import os
+# Set tokenizers parallelism to false to avoid fork warnings
+# This must be set before importing any HuggingFace libraries
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 import json
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_from_disk
-import os
 
 
 def load_gsm8k_dataset():

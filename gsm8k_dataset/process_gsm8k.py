@@ -4,6 +4,11 @@ GSM8K Dataset Processing Script
 This script downloads the GSM8K dataset, processes it, and saves a modified version.
 """
 
+import os
+# Set tokenizers parallelism to false to avoid fork warnings
+# This must be set before importing any HuggingFace libraries
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import re
 import random
 from datasets import load_dataset

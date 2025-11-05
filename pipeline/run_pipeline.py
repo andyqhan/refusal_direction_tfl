@@ -1,7 +1,12 @@
+import os
+# Set tokenizers parallelism to false to avoid fork warnings
+# This must be set before importing any HuggingFace libraries
+# Works reliably on both macOS and CUDA, though slightly slower
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 import random
 import json
-import os
 import argparse
 
 from dataset.load_dataset import load_dataset_split, load_dataset, load_gsm8k_dataset, sample_gsm8k_data
