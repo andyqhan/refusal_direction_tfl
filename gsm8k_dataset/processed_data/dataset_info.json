@@ -17,6 +17,14 @@
     "perturbation_type": {
       "dtype": "string",
       "_type": "Value"
+    },
+    "full_answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "final_answer": {
+      "dtype": "string",
+      "_type": "Value"
     }
   },
   "homepage": "",

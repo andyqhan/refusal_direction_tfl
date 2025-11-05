@@ -11,7 +11,9 @@ from typing import Tuple, Optional, List
 
 
 # Regex pattern to match equations: [number] [optional unit] [operator] [number] [optional unit] = [number]
-EQUATION_PATTERN = r'[\d,\.]+\s*[a-zA-Z]*\s*[\+\-\*/]\s*[\d,\.]+\s*[a-zA-Z]*\s*=\s*[\d,\.]+'
+# Pattern for numbers: integer or decimal (1234, 1,234, 12.34, 1,234.56, .25)
+NUMBER_PATTERN = r'(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)'
+EQUATION_PATTERN = rf'{NUMBER_PATTERN}\s*[a-zA-Z]*\s*[\+\-\*/]\s*{NUMBER_PATTERN}\s*[a-zA-Z]*\s*=\s*-?{NUMBER_PATTERN}'
 
 
 def has_equation_pattern(text: str) -> bool:
@@ -35,15 +37,17 @@ def extract_numbers(text: str) -> List[float]:
     return numbers
 
 
-def parse_equation(text: str) -> Optional[Tuple[float, str, float, float, str, str]]:
+def parse_equation(text: str) -> Optional[Tuple[float, str, float, float, str, str, str, str]]:
     """
     Parse an equation from text.
 
     Returns:
-        Tuple of (operand1, operator, operand2, result, prefix, suffix) or None if parsing fails
+        Tuple of (operand1, operator, operand2, result, prefix, suffix, unit1, unit2) or None if parsing fails
         prefix is the text before the equation, suffix is the text after
     """
-    match = re.search(r'(.*?)([\d,\.]+)\s*([a-zA-Z]*)\s*([\+\-\*/])\s*([\d,\.]+)\s*([a-zA-Z]*)\s*=\s*([\d,\.]+)(.*)', text)
+    # Use NUMBER_PATTERN for more accurate parsing
+    pattern = rf'(.*?)({NUMBER_PATTERN})\s*([a-zA-Z]*)\s*([\+\-\*/])\s*({NUMBER_PATTERN})\s*([a-zA-Z]*)\s*=\s*(-?{NUMBER_PATTERN})(.*)'
+    match = re.search(pattern, text)
     if not match:
         return None
 
@@ -61,11 +65,7 @@ def parse_equation(text: str) -> Optional[Tuple[float, str, float, float, str, s
         operand2 = float(operand2_str.replace(',', ''))
         result = float(result_str.replace(',', ''))
 
-        # Combine prefix and unit1 for reconstructing
-        prefix_with_unit = prefix + operand1_str + (' ' + unit1 if unit1 else '')
-        suffix_with_unit = (' ' + unit2 if unit2 else '') + suffix
-
-        return (operand1, operator, operand2, result, prefix_with_unit, suffix_with_unit)
+        return (operand1, operator, operand2, result, prefix, suffix, unit1, unit2)
     except ValueError:
         return None
 
@@ -86,10 +86,14 @@ def compute_result(operand1: float, operator: str, operand2: float) -> float:
 
 
 def format_number(num: float) -> str:
-    """Format a number, removing trailing zeros."""
+    """Format a number, removing trailing zeros and limiting decimal places."""
     if num == int(num):
         return str(int(num))
-    return str(num).rstrip('0').rstrip('.')
+    # Round to 6 decimal places to avoid very long decimals
+    rounded = round(num, 6)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return str(rounded).rstrip('0').rstrip('.')
 
 
 def operand_swap(equation: str, full_answer: str) -> str:
@@ -107,7 +111,7 @@ def operand_swap(equation: str, full_answer: str) -> str:
     if not parsed:
         return equation
 
-    operand1, operator, operand2, result, prefix, suffix = parsed
+    operand1, operator, operand2, result, prefix, suffix, unit1, unit2 = parsed
 
     if operator not in ['-', '/']:
         return equation
@@ -115,8 +119,10 @@ def operand_swap(equation: str, full_answer: str) -> str:
     # Swap operands and compute new result
     new_result = compute_result(operand2, operator, operand1)
 
-    # Reconstruct equation
-    new_equation = f"{prefix.rsplit(str(format_number(operand1)), 1)[0]}{format_number(operand2)} {operator} {format_number(operand1)} = {format_number(new_result)}{suffix}"
+    # Reconstruct equation with proper spacing
+    unit1_str = f' {unit1}' if unit1 else ''
+    unit2_str = f' {unit2}' if unit2 else ''
+    new_equation = f"{prefix}{format_number(operand2)}{unit2_str} {operator} {format_number(operand1)}{unit1_str} = {format_number(new_result)}{suffix}"
 
     return ensure_period(new_equation)
 
@@ -137,26 +143,29 @@ def number_substitution(equation: str, full_answer: str, question: str) -> str:
     if not parsed:
         return equation
 
-    operand1, operator, operand2, result, prefix, suffix = parsed
+    operand1, operator, operand2, result, prefix, suffix, unit1, unit2 = parsed
 
     # Extract all numbers from question and full answer
     all_numbers = extract_numbers(question + ' ' + full_answer)
 
-    # Filter out the current result
-    different_numbers = [num for num in all_numbers if num != result]
+    # Filter out the current result (with tolerance for floating point comparison)
+    different_numbers = [num for num in all_numbers if abs(num - result) > 0.0001]
 
     if not different_numbers:
-        # Fallback: use operand1 or operand2
-        different_numbers = [operand1, operand2]
+        # Fallback: use operand1 or operand2 if they're different from result
+        different_numbers = [num for num in [operand1, operand2] if abs(num - result) > 0.0001]
+
+    if not different_numbers:
+        # Last resort: add/subtract 1 from result
+        different_numbers = [result + 1, result - 1]
 
     # Pick a random different number
     new_result = random.choice(different_numbers)
 
-    # Reconstruct equation
-    new_equation = f"{prefix} {operator} {format_number(operand2)}{suffix.rsplit(str(format_number(result)), 1)[0]}{format_number(new_result)}{suffix.rsplit(str(format_number(result)), 1)[-1] if str(format_number(result)) in suffix else suffix}"
-
-    # Simpler reconstruction
-    new_equation = equation.replace(f'= {format_number(result)}', f'= {format_number(new_result)}', 1)
+    # Reconstruct equation with proper spacing
+    unit1_str = f' {unit1}' if unit1 else ''
+    unit2_str = f' {unit2}' if unit2 else ''
+    new_equation = f"{prefix}{format_number(operand1)}{unit1_str} {operator} {format_number(operand2)}{unit2_str} = {format_number(new_result)}{suffix}"
 
     return ensure_period(new_equation)
 
@@ -176,7 +185,7 @@ def operator_replace(equation: str, full_answer: str) -> str:
     if not parsed:
         return equation
 
-    operand1, operator, operand2, result, prefix, suffix = parsed
+    operand1, operator, operand2, result, prefix, suffix, unit1, unit2 = parsed
 
     # Choose a different operator
     operators = ['+', '-', '*', '/']
@@ -186,9 +195,10 @@ def operator_replace(equation: str, full_answer: str) -> str:
     # Compute new result
     new_result = compute_result(operand1, new_operator, operand2)
 
-    # Reconstruct equation
-    new_equation = equation.replace(f'{operator}', f'{new_operator}', 1)
-    new_equation = new_equation.replace(f'= {format_number(result)}', f'= {format_number(new_result)}', 1)
+    # Reconstruct equation with proper spacing
+    unit1_str = f' {unit1}' if unit1 else ''
+    unit2_str = f' {unit2}' if unit2 else ''
+    new_equation = f"{prefix}{format_number(operand1)}{unit1_str} {new_operator} {format_number(operand2)}{unit2_str} = {format_number(new_result)}{suffix}"
 
     return ensure_period(new_equation)
 
@@ -208,7 +218,7 @@ def computation_plusminus(equation: str, full_answer: str) -> str:
     if not parsed:
         return equation
 
-    operand1, operator, operand2, result, prefix, suffix = parsed
+    operand1, operator, operand2, result, prefix, suffix, unit1, unit2 = parsed
 
     # Generate random offset between 1 and 10
     offset = random.randint(1, 10)
@@ -216,8 +226,10 @@ def computation_plusminus(equation: str, full_answer: str) -> str:
     sign = random.choice([-1, 1])
     new_result = result + (sign * offset)
 
-    # Reconstruct equation
-    new_equation = equation.replace(f'= {format_number(result)}', f'= {format_number(new_result)}', 1)
+    # Reconstruct equation with proper spacing
+    unit1_str = f' {unit1}' if unit1 else ''
+    unit2_str = f' {unit2}' if unit2 else ''
+    new_equation = f"{prefix}{format_number(operand1)}{unit1_str} {operator} {format_number(operand2)}{unit2_str} = {format_number(new_result)}{suffix}"
 
     return ensure_period(new_equation)
 
@@ -228,6 +240,25 @@ def ensure_period(text: str) -> str:
     if text and not text.endswith('.'):
         text += '.'
     return text
+
+
+def extract_final_answer(answer: str) -> str:
+    """
+    Extract the final answer from the answer string.
+    The final answer is the line prepended by ####.
+
+    Args:
+        answer: The full answer string
+
+    Returns:
+        The final answer (without ####), or empty string if not found
+    """
+    lines = answer.split('\n')
+    for line in lines:
+        if line.strip().startswith('####'):
+            # Remove #### and return the rest
+            return line.strip().replace('####', '').strip()
+    return ""
 
 
 def process_answer(answer: str) -> str:
@@ -339,7 +370,9 @@ def main():
             'question': example['question'],
             'answer': processed_answer,
             'perturbed_answer': perturbed,
-            'perturbation_type': 'operand_swap'
+            'perturbation_type': 'operand_swap',
+            'full_answer': example['answer'],
+            'final_answer': extract_final_answer(example['answer'])
         })
 
     # Process number_substitution group
@@ -351,7 +384,9 @@ def main():
             'question': example['question'],
             'answer': processed_answer,
             'perturbed_answer': perturbed,
-            'perturbation_type': 'number_substitution'
+            'perturbation_type': 'number_substitution',
+            'full_answer': example['answer'],
+            'final_answer': extract_final_answer(example['answer'])
         })
 
     # Process operator_replace group
@@ -363,7 +398,9 @@ def main():
             'question': example['question'],
             'answer': processed_answer,
             'perturbed_answer': perturbed,
-            'perturbation_type': 'operator_replace'
+            'perturbation_type': 'operator_replace',
+            'full_answer': example['answer'],
+            'final_answer': extract_final_answer(example['answer'])
         })
 
     # Process computation_plusminus group
@@ -375,7 +412,9 @@ def main():
             'question': example['question'],
             'answer': processed_answer,
             'perturbed_answer': perturbed,
-            'perturbation_type': 'computation_plusminus'
+            'perturbation_type': 'computation_plusminus',
+            'full_answer': example['answer'],
+            'final_answer': extract_final_answer(example['answer'])
         })
 
     # Convert to HuggingFace dataset
