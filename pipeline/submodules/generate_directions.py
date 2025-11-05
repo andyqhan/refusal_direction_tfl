@@ -10,6 +10,11 @@ from pipeline.utils.hook_utils import add_hooks
 from pipeline.utils.device_utils import clear_device_cache, get_computation_dtype
 from pipeline.model_utils.model_base import ModelBase
 
+# Number of token positions to examine for activation extraction
+# We look at the last 2 token positions
+NUM_ACTIVATION_POSITIONS = 2
+ACTIVATION_POSITIONS = list(range(-NUM_ACTIVATION_POSITIONS, 0))  # [-2, -1]
+
 def get_mean_activations_pre_hook(layer, cache: Float[Tensor, "pos layer d_model"], n_samples, positions: List[int]):
     def hook_fn(module, input):
         activation: Float[Tensor, "batch_size seq_len d_model"] = input[0].clone().to(cache)
@@ -60,11 +65,11 @@ def generate_directions(model_base: ModelBase, harmful_instructions, harmless_in
         harmless_instructions,
         model_base.tokenize_instructions_fn,
         model_base.model_block_modules,
-        positions=[-2, -1],
+        positions=ACTIVATION_POSITIONS,
         # The original repo had eoi_tokens, but this doesn't make sense for us
     )
 
-    assert mean_diffs.shape == (len(model_base.eoi_toks), model_base.model.config.num_hidden_layers, model_base.model.config.hidden_size)
+    assert mean_diffs.shape == (NUM_ACTIVATION_POSITIONS, model_base.model.config.num_hidden_layers, model_base.model.config.hidden_size)
     assert not mean_diffs.isnan().any()
 
     torch.save(mean_diffs, f"{artifact_dir}/mean_diffs.pt")

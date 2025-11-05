@@ -46,9 +46,15 @@ def load_gsm8k_dataset():
     dataset = load_from_disk(gsm8k_path)
     return dataset
 
-def sample_gsm8k_data(dataset, n_samples):
+def sample_gsm8k_data(dataset, n_samples, perturbation_types=None):
     """
-    Sample data uniformly from all perturbation types.
+    Sample data uniformly from specified perturbation types.
+
+    Args:
+        dataset: The GSM8K dataset
+        n_samples: Number of samples to collect
+        perturbation_types: List of perturbation types to sample from, or None for all types
+                           Valid types: 'operand_swap', 'number_substitution', 'operator_replace', 'computation_plusminus'
 
     Returns two lists of chat-formatted samples:
     - baseline_samples: questions with correct answers
@@ -56,15 +62,26 @@ def sample_gsm8k_data(dataset, n_samples):
 
     Each sample is a list of chat dicts: [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     """
-    # Get all perturbation types
-    perturbation_types = list(set(dataset['perturbation_type']))
-    n_per_type = n_samples // len(perturbation_types)
+    # Get all available perturbation types
+    all_types = list(set(dataset['perturbation_type']))
+
+    # Filter to requested types, or use all if None
+    if perturbation_types is None:
+        selected_types = all_types
+    else:
+        # Validate that requested types exist
+        invalid_types = [t for t in perturbation_types if t not in all_types]
+        if invalid_types:
+            raise ValueError(f"Invalid perturbation types: {invalid_types}. Valid types are: {all_types}")
+        selected_types = perturbation_types
+
+    n_per_type = n_samples // len(selected_types)
 
     baseline_samples = []
     perturbed_samples = []
 
-    # Sample uniformly from each perturbation type
-    for ptype in perturbation_types:
+    # Sample uniformly from each selected perturbation type
+    for ptype in selected_types:
         # Filter dataset by perturbation type
         indices = [i for i, t in enumerate(dataset['perturbation_type']) if t == ptype]
         sampled_indices = random.sample(indices, min(n_per_type, len(indices)))

@@ -1,7 +1,12 @@
+import os
+# Set tokenizers parallelism to false to avoid fork warnings
+# This must be set before importing any HuggingFace libraries
+# Works reliably on both macOS and CUDA, though slightly slower
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 import random
 import json
-import os
 import argparse
 
 from dataset.load_dataset import load_dataset_split, load_dataset, load_gsm8k_dataset, sample_gsm8k_data
@@ -18,13 +23,19 @@ from pipeline.submodules.evaluate_loss import evaluate_loss
 def parse_arguments():
     """Parse model path argument from command line."""
     parser = argparse.ArgumentParser(description="Parse model path argument.")
-    parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    parser.add_argument('--model-path', type=str, required=True, help='Path to the model')
     parser.add_argument('--generation-only', action='store_true', help='Only run the direction generation phase, skip selection and evaluation')
+    parser.add_argument('--perturbation-types', type=str, nargs='+', default=['all'],
+                       help='List of perturbation types to sample from. Options: operand_swap, number_substitution, operator_replace, computation_plusminus, or "all" (default: all)')
     return parser.parse_args()
 
-def load_and_sample_datasets(cfg):
+def load_and_sample_datasets(cfg, perturbation_types=None):
     """
     Load GSM8K dataset and sample for training and validation.
+
+    Args:
+        cfg: Configuration object
+        perturbation_types: List of perturbation types to sample from, or None for all types
 
     Returns:
         Tuple of datasets: (perturbed_train, baseline_train, perturbed_val, baseline_val)
@@ -35,11 +46,11 @@ def load_and_sample_datasets(cfg):
     # Load the full GSM8K dataset
     gsm8k_dataset = load_gsm8k_dataset()
 
-    # Sample training data (uniformly from all perturbation types)
-    baseline_train, perturbed_train = sample_gsm8k_data(gsm8k_dataset, cfg.n_train)
+    # Sample training data (uniformly from specified perturbation types)
+    baseline_train, perturbed_train = sample_gsm8k_data(gsm8k_dataset, cfg.n_train, perturbation_types=perturbation_types)
 
-    # Sample validation data (uniformly from all perturbation types)
-    baseline_val, perturbed_val = sample_gsm8k_data(gsm8k_dataset, cfg.n_val)
+    # Sample validation data (uniformly from specified perturbation types)
+    baseline_val, perturbed_val = sample_gsm8k_data(gsm8k_dataset, cfg.n_val, perturbation_types=perturbation_types)
 
     return perturbed_train, baseline_train, perturbed_val, baseline_val
 
@@ -117,15 +128,25 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
-def run_pipeline(model_path, generation_only=False):
-    """Run the full pipeline."""
+def run_pipeline(model_path, generation_only=False, perturbation_types=None):
+    """Run the full pipeline.
+
+    Args:
+        model_path: Path to the model
+        generation_only: If True, only run the direction generation phase
+        perturbation_types: List of perturbation types to sample from, or None/['all'] for all types
+    """
     model_alias = os.path.basename(model_path)
     cfg = Config(model_alias=model_alias, model_path=model_path)
 
     model_base = construct_model_base(cfg.model_path)
 
+    # Process perturbation types argument
+    if perturbation_types is None or perturbation_types == ['all'] or 'all' in perturbation_types:
+        perturbation_types = None  # None means use all types
+
     # Load and sample datasets
-    perturbed_train, baseline_train, perturbed_val, baseline_val = load_and_sample_datasets(cfg)
+    perturbed_train, baseline_train, perturbed_val, baseline_val = load_and_sample_datasets(cfg, perturbation_types=perturbation_types)
 
     # 1. Generate candidate correction directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train)
@@ -181,4 +202,4 @@ def run_pipeline(model_path, generation_only=False):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, generation_only=args.generation_only)
+    run_pipeline(model_path=args.model_path, generation_only=args.generation_only, perturbation_types=args.perturbation_types)
