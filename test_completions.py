@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Test script to evaluate candidate correction directions on GSM8K samples.
+Test script to evaluate candidate correction directions on prompts.
 
 This script loads a direction vector from mean_diffs.pt and generates completions
-on a sample of GSM8K questions with activation addition intervention.
+with activation addition intervention. Supports loading prompts from a CSV file
+or sampling from the GSM8K dataset.
 """
 
 import argparse
+import csv
 import json
 import os
 import random
@@ -40,7 +42,7 @@ from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Test candidate correction directions on GSM8K samples",
+        description="Test candidate correction directions on prompts from CSV or GSM8K dataset",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -54,12 +56,21 @@ def parse_arguments():
                         help='Which token position from mean_diffs (0-indexed, or negative for counting from end)')
     parser.add_argument('--coeff', type=float, default=2.0,
                         help='Addition strength coefficient')
-    parser.add_argument('--max_new_tokens', type=int, default=128,
+    parser.add_argument('--max_new_tokens', type=int, default=256,
                         help='Number of tokens to generate')
+    parser.add_argument('--temperature', type=float, default=0.7,
+                        help='Sampling temperature for generation')
     parser.add_argument('--output_file', type=str, default=None,
                         help='Path to save completions JSON (prints to stdout if not specified)')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for generation')
+
+    # Data source options
+    data_group = parser.add_mutually_exclusive_group(required=True)
+    data_group.add_argument('--csv_file', type=str,
+                        help='Path to CSV file with prompts (columns: "User prompt", "Category")')
+    data_group.add_argument('--use_gsm8k', action='store_true',
+                        help='Use GSM8K dataset instead of CSV file')
 
     return parser.parse_args()
 
@@ -103,6 +114,46 @@ def load_direction_vector(mean_diffs_path, pos, layer):
     print(f"Direction norm: {direction.norm().item():.4f}")
 
     return direction, mean_diffs_shape
+
+
+def load_csv_prompts(csv_file):
+    """
+    Load prompts from CSV file.
+
+    Expected columns: "User prompt", "Category" (and optionally others)
+
+    Returns:
+        List of dicts formatted for generate_completions with 'instruction' and 'category' keys
+    """
+    print(f"\nLoading prompts from CSV: {csv_file}")
+
+    formatted_dataset = []
+
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            user_prompt = row['User prompt']
+            category = row.get('Category', 'unknown')
+
+            # Format as chat (just the user prompt)
+            chat_format = [{"role": "user", "content": user_prompt}]
+
+            formatted_dataset.append({
+                'instruction': chat_format,
+                'category': category
+            })
+
+    print(f"Loaded {len(formatted_dataset)} prompts")
+
+    # Print distribution of categories
+    from collections import Counter
+    type_counts = Counter([item['category'] for item in formatted_dataset])
+    print("Category distribution:")
+    for category, count in sorted(type_counts.items()):
+        print(f"  {category}: {count}")
+
+    return formatted_dataset
 
 
 def sample_gsm8k_questions(n_samples=50, seed=74):
@@ -155,7 +206,7 @@ def sample_gsm8k_questions(n_samples=50, seed=74):
     return formatted_dataset
 
 
-def generate_with_intervention(model_base, dataset, direction, layer, coeff, max_new_tokens, batch_size):
+def generate_with_intervention(model_base, dataset, direction, layer, coeff, max_new_tokens, batch_size, temperature):
     """
     Generate completions with activation addition intervention.
 
@@ -166,6 +217,7 @@ def generate_with_intervention(model_base, dataset, direction, layer, coeff, max
     print(f"  Layer: {layer}")
     print(f"  Coefficient: {coeff}")
     print(f"  Max new tokens: {max_new_tokens}")
+    print(f"  Temperature: {temperature}")
     print(f"  Batch size: {batch_size}")
 
     # Create activation addition hooks
@@ -181,7 +233,8 @@ def generate_with_intervention(model_base, dataset, direction, layer, coeff, max
         fwd_pre_hooks=fwd_pre_hooks,
         fwd_hooks=fwd_hooks,
         batch_size=batch_size,
-        max_new_tokens=max_new_tokens
+        max_new_tokens=max_new_tokens,
+        temperature=temperature
     )
 
     print(f"Generated {len(completions)} completions")
@@ -225,7 +278,10 @@ def main():
     args = parse_arguments()
 
     print("=" * 80)
-    print("Testing Candidate Correction Directions on GSM8K")
+    if args.csv_file:
+        print(f"Testing Candidate Correction Directions on CSV: {args.csv_file}")
+    else:
+        print("Testing Candidate Correction Directions on GSM8K")
     print("=" * 80)
 
     # Load model
@@ -243,8 +299,11 @@ def main():
         args.layer
     )
 
-    # Sample GSM8K questions
-    dataset = sample_gsm8k_questions(n_samples=10, seed=74)
+    # Load dataset based on source
+    if args.csv_file:
+        dataset = load_csv_prompts(args.csv_file)
+    else:
+        dataset = sample_gsm8k_questions(n_samples=10, seed=74)
 
     # Generate completions with intervention
     completions = generate_with_intervention(
@@ -254,7 +313,8 @@ def main():
         layer=args.layer,
         coeff=args.coeff,
         max_new_tokens=args.max_new_tokens,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        temperature=args.temperature
     )
 
     # Prepare metadata
@@ -266,7 +326,9 @@ def main():
         "pos": args.pos,
         "coeff": args.coeff,
         "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
         "batch_size": args.batch_size,
+        "data_source": args.csv_file if args.csv_file else "gsm8k",
         "num_samples": len(completions)
     }
 

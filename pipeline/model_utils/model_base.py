@@ -64,8 +64,11 @@ class ModelBase(ABC):
     def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff: float, layer: int):
         pass
 
-    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64):
-        generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
+    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64, temperature=None):
+        if temperature is not None and temperature > 0:
+            generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature)
+        else:
+            generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
         generation_config.pad_token_id = self.tokenizer.pad_token_id
 
         completions = []

@@ -107,7 +107,7 @@ def get_directional_patching_input_pre_hook(direction: Float[Tensor, "d_model"],
             return activation
     return hook_fn
 
-def get_activation_addition_input_pre_hook(vector: Float[Tensor, "d_model"], coeff: Float[Tensor, ""]):
+def get_activation_addition_input_pre_hook(vector: Float[Tensor, "d_model"], coeff: Float[Tensor, ""], last_token_only: bool = False, steering_start_pos: int = None):
     def hook_fn(module, input):
         nonlocal vector
 
@@ -117,7 +117,18 @@ def get_activation_addition_input_pre_hook(vector: Float[Tensor, "d_model"], coe
             activation: Float[Tensor, "batch_size seq_len d_model"] = input
 
         vector = vector.to(activation)
-        activation += coeff * vector
+
+        if last_token_only:
+            if steering_start_pos is not None:
+                # Apply steering from steering_start_pos onward (all subsequent tokens)
+                # This steers the initial prompt's last token, all assistant tokens, and all future user messages
+                activation[:, steering_start_pos:, :] += coeff * vector
+            else:
+                # Fallback: only apply steering to the last token position
+                activation[:, -1, :] += coeff * vector
+        else:
+            # Apply steering to all token positions (broadcasts across seq_len)
+            activation += coeff * vector
 
         if isinstance(input, tuple):
             return (activation, *input[1:])
