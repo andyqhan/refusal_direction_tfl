@@ -33,9 +33,9 @@ set -e  # Exit on error
 # ========================
 
 # Paths - UPDATE THESE if needed
-PROJECT_DIR="$HOME/refusal_direction_tfl"
-VENV_DIR="/scratch/$USER/venvs/refusal-dir-env"
-CACHE_DIR="/scratch/$USER/hf_cache"
+PROJECT_DIR="/scratch/$USER/refusal_direction_tfl"  # Project in scratch
+VENV_DIR="/scratch/$USER/venvs/refusal-dir-env"     # Virtual env in scratch
+CACHE_DIR="/scratch/$USER/hf_cache"                 # HF cache in scratch
 SUBMIT_DIR="$SLURM_SUBMIT_DIR"
 
 # Singularity/Apptainer settings for Torch
