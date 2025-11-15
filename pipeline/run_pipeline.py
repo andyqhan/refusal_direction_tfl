@@ -14,6 +14,7 @@ from dataset.load_dataset import load_dataset_split, load_dataset, load_gsm8k_da
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
 from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks
+from pipeline.utils.device_utils import monitor_gpu
 
 from pipeline.submodules.generate_directions import generate_directions
 from pipeline.submodules.select_direction import select_direction, get_refusal_scores
@@ -144,31 +145,32 @@ def run_pipeline(model_path, run_full_pipeline=False, perturbation_types=None, b
         n_train: Number of training samples to use for direction generation
         n_val: Number of validation samples to use for direction selection
     """
-    model_alias = os.path.basename(model_path)
-    cfg = Config(model_alias=model_alias, model_path=model_path, batch_size=batch_size, n_train=n_train, n_val=n_val)
+    with monitor_gpu():
+        model_alias = os.path.basename(model_path)
+        cfg = Config(model_alias=model_alias, model_path=model_path, batch_size=batch_size, n_train=n_train, n_val=n_val)
 
-    model_base = construct_model_base(cfg.model_path)
+        model_base = construct_model_base(cfg.model_path)
 
-    # Process perturbation types argument
-    if perturbation_types is None or perturbation_types == ['all'] or 'all' in perturbation_types:
-        perturbation_types = None  # None means use all types
+        # Process perturbation types argument
+        if perturbation_types is None or perturbation_types == ['all'] or 'all' in perturbation_types:
+            perturbation_types = None  # None means use all types
 
-    # Load and sample datasets
-    perturbed_train, baseline_train, perturbed_val, baseline_val = load_and_sample_datasets(cfg, perturbation_types=perturbation_types)
+        # Load and sample datasets
+        perturbed_train, baseline_train, perturbed_val, baseline_val = load_and_sample_datasets(cfg, perturbation_types=perturbation_types)
 
-    # 1. Generate candidate correction directions
-    candidate_directions = generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train)
+        # 1. Generate candidate correction directions
+        candidate_directions = generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train)
 
-    if not run_full_pipeline:
-        print(f"Generation complete. Candidate directions saved to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
-        return
+        if not run_full_pipeline:
+            print(f"Generation complete. Candidate directions saved to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
+            return
 
-    # 2. Select the most effective correction direction
-    pos, layer, direction = select_and_save_direction(cfg, model_base, perturbed_val, baseline_val, candidate_directions)
+        # 2. Select the most effective correction direction
+        pos, layer, direction = select_and_save_direction(cfg, model_base, perturbed_val, baseline_val, candidate_directions)
 
-    print(f"Direction extraction complete!")
-    print(f"Selected direction: pos={pos}, layer={layer}")
-    print(f"Direction saved to {cfg.artifact_path()}/direction.pt")
+        print(f"Direction extraction complete!")
+        print(f"Selected direction: pos={pos}, layer={layer}")
+        print(f"Direction saved to {cfg.artifact_path()}/direction.pt")
 
     # EVALUATION CODE (DISABLED BY DEFAULT)
     # Uncomment the sections below to run evaluation on the extracted direction

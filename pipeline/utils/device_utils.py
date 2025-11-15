@@ -2,6 +2,9 @@
 
 import torch
 import logging
+import subprocess
+from contextlib import contextmanager
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +83,117 @@ def get_computation_dtype(device: torch.device) -> torch.dtype:
         return torch.float32
     else:
         return torch.float64
+
+
+def get_gpu_utilization() -> Optional[float]:
+    """
+    Get current GPU utilization percentage using nvidia-smi.
+
+    Returns:
+        GPU utilization as a float (0-100), or None if unable to query
+    """
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip().split('\n')[0])
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    return None
+
+
+class GPUMonitor:
+    """
+    Monitor GPU memory and utilization during execution.
+
+    Usage:
+        monitor = GPUMonitor()
+        monitor.start()
+        # ... run your code ...
+        monitor.print_stats()
+    """
+
+    def __init__(self):
+        self.is_cuda = torch.cuda.is_available()
+        self.max_memory_allocated = 0
+        self.max_memory_reserved = 0
+        self.max_utilization = 0
+        self.initial_memory = 0
+
+    def start(self):
+        """Start monitoring GPU stats."""
+        if self.is_cuda:
+            torch.cuda.reset_peak_memory_stats()
+            self.initial_memory = torch.cuda.memory_allocated()
+
+    def update(self):
+        """Update peak statistics."""
+        if self.is_cuda:
+            self.max_memory_allocated = max(
+                self.max_memory_allocated,
+                torch.cuda.max_memory_allocated()
+            )
+            self.max_memory_reserved = max(
+                self.max_memory_reserved,
+                torch.cuda.max_memory_reserved()
+            )
+
+            utilization = get_gpu_utilization()
+            if utilization is not None:
+                self.max_utilization = max(self.max_utilization, utilization)
+
+    def print_stats(self):
+        """Print GPU statistics summary."""
+        if not self.is_cuda:
+            return
+
+        # Update one final time
+        self.update()
+
+        print("\n" + "="*60)
+        print("GPU STATISTICS SUMMARY")
+        print("="*60)
+
+        # Memory stats
+        max_mem_gb = self.max_memory_allocated / (1024**3)
+        max_reserved_gb = self.max_memory_reserved / (1024**3)
+
+        print(f"Max GPU Memory Allocated: {max_mem_gb:.2f} GB")
+        print(f"Max GPU Memory Reserved:  {max_reserved_gb:.2f} GB")
+
+        # Utilization
+        if self.max_utilization > 0:
+            print(f"Max GPU Utilization:      {self.max_utilization:.1f}%")
+        else:
+            print("Max GPU Utilization:      N/A (nvidia-smi not available)")
+
+        # Device info
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            print(f"GPU Device:               {device_name}")
+
+        print("="*60 + "\n")
+
+
+@contextmanager
+def monitor_gpu():
+    """
+    Context manager for monitoring GPU usage.
+
+    Usage:
+        with monitor_gpu():
+            # your code here
+            pass
+        # GPU stats will be printed automatically
+    """
+    monitor = GPUMonitor()
+    monitor.start()
+
+    try:
+        yield monitor
+    finally:
+        monitor.print_stats()

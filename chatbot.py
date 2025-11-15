@@ -33,6 +33,7 @@ warnings.filterwarnings('ignore', message='To copy construct from a tensor.*', c
 
 from pipeline.model_utils.model_factory import construct_model_base
 from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, add_hooks
+from pipeline.utils.device_utils import monitor_gpu
 
 
 def parse_arguments():
@@ -369,75 +370,76 @@ def chat_loop(model_base, direction, layer, coeff, max_new_tokens, temperature, 
 
 def main():
     """Main execution function."""
-    args = parse_arguments()
+    with monitor_gpu():
+        args = parse_arguments()
 
-    print("=" * 80)
-    print("Interactive Chatbot with Steered Concept Vectors")
-    print("=" * 80)
+        print("=" * 80)
+        print("Interactive Chatbot with Steered Concept Vectors")
+        print("=" * 80)
 
-    # Determine model path
-    model_path = args.model_path
-    if model_path is None:
-        print("\nAttempting to infer model path from mean_diffs_path...")
-        model_path = extract_model_path_from_mean_diffs_path(args.mean_diffs_path)
+        # Determine model path
+        model_path = args.model_path
         if model_path is None:
-            print("\n\033[1;31mError:\033[0m Could not infer model path from mean_diffs_path.")
-            print("Please provide --model_path explicitly.")
+            print("\nAttempting to infer model path from mean_diffs_path...")
+            model_path = extract_model_path_from_mean_diffs_path(args.mean_diffs_path)
+            if model_path is None:
+                print("\n\033[1;31mError:\033[0m Could not infer model path from mean_diffs_path.")
+                print("Please provide --model_path explicitly.")
+                sys.exit(1)
+            print(f"Inferred model path: {model_path}")
+
+        # Load model
+        print(f"\nLoading model from: {model_path}")
+        sys.stdout.flush()
+        try:
+            model_base = construct_model_base(model_path)
+            print(f"✓ Model loaded successfully")
+            print(f"✓ Number of layers: {len(model_base.model_block_modules)}")
+        except Exception as e:
+            print(f"\n\033[1;31mError loading model:\033[0m {str(e)}")
             sys.exit(1)
-        print(f"Inferred model path: {model_path}")
 
-    # Load model
-    print(f"\nLoading model from: {model_path}")
-    sys.stdout.flush()
-    try:
-        model_base = construct_model_base(model_path)
-        print(f"✓ Model loaded successfully")
-        print(f"✓ Number of layers: {len(model_base.model_block_modules)}")
-    except Exception as e:
-        print(f"\n\033[1;31mError loading model:\033[0m {str(e)}")
-        sys.exit(1)
+        # Load direction vector
+        try:
+            direction, mean_diffs_shape = load_direction_vector(
+                args.mean_diffs_path,
+                args.pos,
+                args.layer
+            )
+            print(f"✓ Direction vector loaded successfully")
+        except Exception as e:
+            print(f"\n\033[1;31mError loading direction vector:\033[0m {str(e)}")
+            sys.exit(1)
 
-    # Load direction vector
-    try:
-        direction, mean_diffs_shape = load_direction_vector(
-            args.mean_diffs_path,
-            args.pos,
-            args.layer
+        # Display configuration
+        print("\n" + "─" * 80)
+        print("Configuration:")
+        print(f"  Model: {model_path}")
+        print(f"  Layer: {args.layer}")
+        print(f"  Position: {args.pos}")
+        print(f"  Coefficient: {args.coeff}")
+        print(f"  Max new tokens: {args.max_new_tokens}")
+        print(f"  Temperature: {args.temperature}")
+        print(f"  Batch size: {args.batch_size}")
+        print(f"  Last token only: {args.last_token_only}")
+        print(f"  Input mode: {'prompt_toolkit (readline support)' if PROMPT_TOOLKIT_AVAILABLE else 'basic input'}")
+        print("─" * 80)
+
+        # Start chat loop
+        chat_loop(
+            model_base=model_base,
+            direction=direction,
+            layer=args.layer,
+            coeff=args.coeff,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            batch_size=args.batch_size,
+            last_token_only=args.last_token_only
         )
-        print(f"✓ Direction vector loaded successfully")
-    except Exception as e:
-        print(f"\n\033[1;31mError loading direction vector:\033[0m {str(e)}")
-        sys.exit(1)
 
-    # Display configuration
-    print("\n" + "─" * 80)
-    print("Configuration:")
-    print(f"  Model: {model_path}")
-    print(f"  Layer: {args.layer}")
-    print(f"  Position: {args.pos}")
-    print(f"  Coefficient: {args.coeff}")
-    print(f"  Max new tokens: {args.max_new_tokens}")
-    print(f"  Temperature: {args.temperature}")
-    print(f"  Batch size: {args.batch_size}")
-    print(f"  Last token only: {args.last_token_only}")
-    print(f"  Input mode: {'prompt_toolkit (readline support)' if PROMPT_TOOLKIT_AVAILABLE else 'basic input'}")
-    print("─" * 80)
-
-    # Start chat loop
-    chat_loop(
-        model_base=model_base,
-        direction=direction,
-        layer=args.layer,
-        coeff=args.coeff,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        batch_size=args.batch_size,
-        last_token_only=args.last_token_only
-    )
-
-    print("\n" + "=" * 80)
-    print("DONE")
-    print("=" * 80)
+        print("\n" + "=" * 80)
+        print("DONE")
+        print("=" * 80)
 
 
 if __name__ == "__main__":
