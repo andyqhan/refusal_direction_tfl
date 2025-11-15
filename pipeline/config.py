@@ -10,6 +10,7 @@ class Config:
     model_path: str
     n_train: int = 32
     n_val: int = 8
+    batch_size: int = 32
     evaluation_datasets: Tuple[str] = ("jailbreakbench",)
     max_new_tokens: int = 512
     jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2")

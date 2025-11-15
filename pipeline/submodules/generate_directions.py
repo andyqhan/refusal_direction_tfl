@@ -54,7 +54,7 @@ def get_mean_diff(model, tokenizer, harmful_instructions, harmless_instructions,
 
     return mean_diff
 
-def generate_directions(model_base: ModelBase, harmful_instructions, harmless_instructions, artifact_dir):
+def generate_directions(model_base: ModelBase, harmful_instructions, harmless_instructions, artifact_dir, batch_size=32):
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
 
@@ -65,6 +65,7 @@ def generate_directions(model_base: ModelBase, harmful_instructions, harmless_in
         harmless_instructions,
         model_base.tokenize_instructions_fn,
         model_base.model_block_modules,
+        batch_size=batch_size,
         positions=ACTIVATION_POSITIONS,
         # The original repo had eoi_tokens, but this doesn't make sense for us
     )

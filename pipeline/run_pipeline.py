@@ -24,9 +24,12 @@ def parse_arguments():
     """Parse model path argument from command line."""
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model-path', type=str, required=True, help='Path to the model')
-    parser.add_argument('--generation-only', action='store_true', help='Only run the direction generation phase, skip selection and evaluation')
+    parser.add_argument('--run-full-pipeline', action='store_true', help='Run the full pipeline including selection and evaluation (default: generation only)')
     parser.add_argument('--perturbation-types', type=str, nargs='+', default=['all'],
                        help='List of perturbation types to sample from. Options: operand_swap, number_substitution, operator_replace, computation_plusminus, or "all" (default: all)')
+    parser.add_argument('--batch-size', type=int, default=32, help='Batch size for forward passes during direction generation and selection (default: 32)')
+    parser.add_argument('--n-train', type=int, default=32, help='Number of training samples to use for direction generation (default: 32)')
+    parser.add_argument('--n-val', type=int, default=8, help='Number of validation samples to use for direction selection (default: 8)')
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg, perturbation_types=None):
@@ -63,7 +66,8 @@ def generate_and_save_candidate_directions(cfg, model_base, perturbed_train, bas
         model_base,
         perturbed_train,
         baseline_train,
-        artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"))
+        artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"),
+        batch_size=cfg.batch_size)
 
     torch.save(mean_diffs, os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt'))
 
@@ -79,7 +83,8 @@ def select_and_save_direction(cfg, model_base, perturbed_val, baseline_val, cand
         perturbed_val,
         baseline_val,
         candidate_directions,
-        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction"),
+        batch_size=cfg.batch_size
     )
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
@@ -128,16 +133,19 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
-def run_pipeline(model_path, generation_only=False, perturbation_types=None):
+def run_pipeline(model_path, run_full_pipeline=False, perturbation_types=None, batch_size=32, n_train=32, n_val=8):
     """Run the full pipeline.
 
     Args:
         model_path: Path to the model
-        generation_only: If True, only run the direction generation phase
+        run_full_pipeline: If True, run selection and evaluation phases (default: False, generation only)
         perturbation_types: List of perturbation types to sample from, or None/['all'] for all types
+        batch_size: Batch size for forward passes during direction generation and selection
+        n_train: Number of training samples to use for direction generation
+        n_val: Number of validation samples to use for direction selection
     """
     model_alias = os.path.basename(model_path)
-    cfg = Config(model_alias=model_alias, model_path=model_path)
+    cfg = Config(model_alias=model_alias, model_path=model_path, batch_size=batch_size, n_train=n_train, n_val=n_val)
 
     model_base = construct_model_base(cfg.model_path)
 
@@ -151,7 +159,7 @@ def run_pipeline(model_path, generation_only=False, perturbation_types=None):
     # 1. Generate candidate correction directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, perturbed_train, baseline_train)
 
-    if generation_only:
+    if not run_full_pipeline:
         print(f"Generation complete. Candidate directions saved to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
         return
 
@@ -202,4 +210,11 @@ def run_pipeline(model_path, generation_only=False, perturbation_types=None):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, generation_only=args.generation_only, perturbation_types=args.perturbation_types)
+    run_pipeline(
+        model_path=args.model_path,
+        run_full_pipeline=args.run_full_pipeline,
+        perturbation_types=args.perturbation_types,
+        batch_size=args.batch_size,
+        n_train=args.n_train,
+        n_val=args.n_val
+    )

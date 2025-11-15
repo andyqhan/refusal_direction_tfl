@@ -1,6 +1,5 @@
 #!/bin/bash
-#SBATCH -A pr_130_tandon_advanced         # Update this for Torch
-#SBATCH -p tandon_a100_2                  # Update this for Torch
+#SBATCH -A torch_pr_230_tandon_priority         # Update this for Torch
 #SBATCH --job-name=refusal-dir
 #SBATCH --output=logs/refusal_%j.out
 #SBATCH --error=logs/refusal_%j.err
@@ -8,8 +7,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64GB
-#SBATCH --time=24:00:00
+#SBATCH --time=3:00:00
 #SBATCH --gres=gpu:1
+#SBATCH --constraint=h200
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ah7660@nyu.edu
 
@@ -20,10 +20,18 @@
 # It uses uv + virtual environments instead of Conda + overlays.
 #
 # Usage:
-#   sbatch hpc/run_pipeline.slurm --model-path MODEL_PATH [options]
+#   sbatch hpc/run_pipeline.slurm [options]
 #
-# Example:
+# Default configuration:
+#   - Model: Qwen/Qwen3-8B
+#   - Batch size: 16
+#   - Training samples: 32
+#   - Perturbation types: number_substitution, operator_replace, computation_plusminus
+#
+# Examples:
+#   sbatch hpc/run_pipeline.slurm  # Run with defaults
 #   sbatch hpc/run_pipeline.slurm --model-path meta-llama/Llama-3.2-8B-Instruct
+#   sbatch hpc/run_pipeline.slurm --batch-size 32 --n-train 64
 # =============================================================================
 
 set -e  # Exit on error
@@ -104,19 +112,24 @@ $SINGULARITY_BIN exec --nv "$CONTAINER_IMAGE" nvidia-smi
 echo ""
 
 # ======================
+# Default Configuration
+# ======================
+# Set default values for pipeline arguments
+DEFAULT_MODEL_PATH="Qwen/Qwen3-8B"
+DEFAULT_BATCH_SIZE="16"
+DEFAULT_N_TRAIN="32"
+DEFAULT_PERTURBATION_TYPES="number_substitution operator_replace computation_plusminus"
+
+# ======================
 # Parse Arguments
 # ======================
 # Get all arguments passed to sbatch after the script name
 SCRIPT_ARGS="${@}"
 
+# If no arguments provided, use defaults
 if [ -z "$SCRIPT_ARGS" ]; then
-    echo "ERROR: No arguments provided!"
-    echo "Usage: sbatch hpc/run_pipeline.slurm --model-path MODEL_PATH [options]"
-    echo ""
-    echo "Examples:"
-    echo "  sbatch hpc/run_pipeline.slurm --model-path meta-llama/Llama-3.2-8B-Instruct"
-    echo "  sbatch hpc/run_pipeline.slurm --model-path Qwen/Qwen2.5-7B-Instruct --generation-only"
-    exit 1
+    echo "No arguments provided, using defaults..."
+    SCRIPT_ARGS="--model-path $DEFAULT_MODEL_PATH --batch-size $DEFAULT_BATCH_SIZE --n-train $DEFAULT_N_TRAIN --perturbation-types $DEFAULT_PERTURBATION_TYPES"
 fi
 
 echo "=== Pipeline Arguments ==="
