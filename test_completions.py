@@ -37,6 +37,7 @@ import torch
 from dataset.load_dataset import load_gsm8k_dataset
 from pipeline.model_utils.model_factory import construct_model_base
 from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook
+from pipeline.utils.device_utils import monitor_gpu
 
 
 def parse_arguments():
@@ -65,12 +66,13 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for generation')
 
-    # Data source options
-    data_group = parser.add_mutually_exclusive_group(required=True)
-    data_group.add_argument('--csv_file', type=str,
+    # Data source options (can use both simultaneously)
+    parser.add_argument('--csv_file', type=str,
                         help='Path to CSV file with prompts (columns: "User prompt", "Category")')
-    data_group.add_argument('--use_gsm8k', action='store_true',
-                        help='Use GSM8K dataset instead of CSV file')
+    parser.add_argument('--use_gsm8k', action='store_true',
+                        help='Use GSM8K dataset (can be combined with --csv_file)')
+    parser.add_argument('--gsm8k_samples', type=int, default=10,
+                        help='Number of GSM8K samples to use (default: 10)')
 
     return parser.parse_args()
 
@@ -156,7 +158,7 @@ def load_csv_prompts(csv_file):
     return formatted_dataset
 
 
-def sample_gsm8k_questions(n_samples=50, seed=74):
+def sample_gsm8k_questions(n_samples=10, seed=74):
     """
     Sample questions from GSM8K dataset.
 
@@ -275,69 +277,115 @@ def save_or_print_results(completions, metadata, output_file):
 
 def main():
     """Main execution function."""
-    args = parse_arguments()
+    with monitor_gpu():
+        args = parse_arguments()
 
-    print("=" * 80)
-    if args.csv_file:
-        print(f"Testing Candidate Correction Directions on CSV: {args.csv_file}")
-    else:
-        print("Testing Candidate Correction Directions on GSM8K")
-    print("=" * 80)
+        # Validate at least one data source is provided
+        if not args.csv_file and not args.use_gsm8k:
+            print("ERROR: Must provide at least one data source (--csv_file or --use_gsm8k)")
+            sys.exit(1)
 
-    # Load model
-    print(f"\nLoading model from: {args.model_path}")
-    sys.stdout.flush()
-    model_base = construct_model_base(args.model_path)
-    print(f"Model loaded successfully")
-    print(f"Number of layers: {len(model_base.model_block_modules)}")
-    sys.stdout.flush()
+        print("=" * 80)
+        data_sources = []
+        if args.csv_file:
+            data_sources.append(f"CSV: {args.csv_file}")
+        if args.use_gsm8k:
+            data_sources.append("GSM8K")
+        print(f"Testing Candidate Correction Directions on: {', '.join(data_sources)}")
+        print("=" * 80)
 
-    # Load direction vector
-    direction, mean_diffs_shape = load_direction_vector(
-        args.mean_diffs_path,
-        args.pos,
-        args.layer
-    )
+        # Load model
+        print(f"\nLoading model from: {args.model_path}")
+        sys.stdout.flush()
+        model_base = construct_model_base(args.model_path)
+        print(f"Model loaded successfully")
+        print(f"Number of layers: {len(model_base.model_block_modules)}")
+        sys.stdout.flush()
 
-    # Load dataset based on source
-    if args.csv_file:
-        dataset = load_csv_prompts(args.csv_file)
-    else:
-        dataset = sample_gsm8k_questions(n_samples=10, seed=74)
+        # Load direction vector
+        direction, mean_diffs_shape = load_direction_vector(
+            args.mean_diffs_path,
+            args.pos,
+            args.layer
+        )
 
-    # Generate completions with intervention
-    completions = generate_with_intervention(
-        model_base=model_base,
-        dataset=dataset,
-        direction=direction,
-        layer=args.layer,
-        coeff=args.coeff,
-        max_new_tokens=args.max_new_tokens,
-        batch_size=args.batch_size,
-        temperature=args.temperature
-    )
+        # Collect all completions from different sources
+        all_completions = []
+        data_source_info = []
 
-    # Prepare metadata
-    metadata = {
-        "model_path": args.model_path,
-        "mean_diffs_path": args.mean_diffs_path,
-        "mean_diffs_shape": mean_diffs_shape,
-        "layer": args.layer,
-        "pos": args.pos,
-        "coeff": args.coeff,
-        "max_new_tokens": args.max_new_tokens,
-        "temperature": args.temperature,
-        "batch_size": args.batch_size,
-        "data_source": args.csv_file if args.csv_file else "gsm8k",
-        "num_samples": len(completions)
-    }
+        # Load and process CSV dataset if provided
+        if args.csv_file:
+            print("\n" + "=" * 80)
+            print("PROCESSING CSV DATASET")
+            print("=" * 80)
+            csv_dataset = load_csv_prompts(args.csv_file)
+            csv_completions = generate_with_intervention(
+                model_base=model_base,
+                dataset=csv_dataset,
+                direction=direction,
+                layer=args.layer,
+                coeff=args.coeff,
+                max_new_tokens=args.max_new_tokens,
+                batch_size=args.batch_size,
+                temperature=args.temperature
+            )
+            # Add source label to each completion
+            for completion in csv_completions:
+                completion['data_source'] = 'csv'
+            all_completions.extend(csv_completions)
+            data_source_info.append({
+                "type": "csv",
+                "file": args.csv_file,
+                "num_samples": len(csv_completions)
+            })
 
-    # Save or print results
-    save_or_print_results(completions, metadata, args.output_file)
+        # Load and process GSM8K dataset if requested
+        if args.use_gsm8k:
+            print("\n" + "=" * 80)
+            print("PROCESSING GSM8K DATASET")
+            print("=" * 80)
+            gsm8k_dataset = sample_gsm8k_questions(n_samples=args.gsm8k_samples, seed=74)
+            gsm8k_completions = generate_with_intervention(
+                model_base=model_base,
+                dataset=gsm8k_dataset,
+                direction=direction,
+                layer=args.layer,
+                coeff=args.coeff,
+                max_new_tokens=args.max_new_tokens,
+                batch_size=args.batch_size,
+                temperature=args.temperature
+            )
+            # Add source label to each completion
+            for completion in gsm8k_completions:
+                completion['data_source'] = 'gsm8k'
+            all_completions.extend(gsm8k_completions)
+            data_source_info.append({
+                "type": "gsm8k",
+                "num_samples": len(gsm8k_completions),
+                "gsm8k_samples": args.gsm8k_samples
+            })
 
-    print("\n" + "=" * 80)
-    print("DONE")
-    print("=" * 80)
+        # Prepare metadata
+        metadata = {
+            "model_path": args.model_path,
+            "mean_diffs_path": args.mean_diffs_path,
+            "mean_diffs_shape": mean_diffs_shape,
+            "layer": args.layer,
+            "pos": args.pos,
+            "coeff": args.coeff,
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "batch_size": args.batch_size,
+            "data_sources": data_source_info,
+            "total_samples": len(all_completions)
+        }
+
+        # Save or print results
+        save_or_print_results(all_completions, metadata, args.output_file)
+
+        print("\n" + "=" * 80)
+        print("DONE")
+        print("=" * 80)
 
 
 if __name__ == "__main__":
