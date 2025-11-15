@@ -1,8 +1,7 @@
 #!/bin/bash
 #SBATCH -A torch_pr_230_tandon_priority         # Update this for Torch
 #SBATCH --job-name=refusal-dir
-#SBATCH --output=logs/refusal_%j.out
-#SBATCH --error=logs/refusal_%j.err
+#SBATCH --output=logs/refusal_%j.log
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -183,7 +182,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Status: SUCCESS ✓"
 else
     echo "Status: FAILED ✗"
-    echo "Check error log: logs/refusal_${SLURM_JOB_ID}.err"
+    echo "Check log: logs/refusal_${SLURM_JOB_ID}.log"
 fi
 
 echo "=================================================="
