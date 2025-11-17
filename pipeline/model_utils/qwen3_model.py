@@ -73,9 +73,10 @@ def tokenize_instructions_qwen3_chat(
     # Check if instructions are already in chat format
     if instructions and isinstance(instructions[0], list):
         # New chat format: use apply_chat_template
-        # Note: enable_thinking=False disables Qwen3's thinking mode for efficiency
+        # Note: enable_thinking=False adds empty <think> tags to suppress thinking mode
+        # add_generation_prompt=True adds the assistant prompt and proper formatting
         prompts = [
-            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=False, enable_thinking=enable_thinking)
+            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking)
             for chat in instructions
         ]
     else:
