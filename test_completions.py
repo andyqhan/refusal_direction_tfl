@@ -254,6 +254,10 @@ def generate_with_intervention(model_base, dataset, direction, layer, coeff, max
     print(f"  Enable thinking: {enable_thinking}")
 
     # Create activation addition hooks
+    # Note: The intervention is applied to ALL token positions (default behavior).
+    # During extraction, we identified the direction from specific positions (last 2 tokens with enable_thinking=True),
+    # but during intervention, we apply it globally to modify the representation space.
+    # This affects the entire forward pass, including any think tags if enable_thinking=False.
     fwd_pre_hooks = [(
         model_base.model_block_modules[layer],
         get_activation_addition_input_pre_hook(vector=direction, coeff=coeff)

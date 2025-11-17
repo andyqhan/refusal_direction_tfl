@@ -93,7 +93,7 @@ class ModelBase(ABC):
                     completion = {
                         'category': categories[i + generation_idx],
                         'prompt': instructions[i + generation_idx],
-                        'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
+                        'response': self.tokenizer.decode(generation, skip_special_tokens=False).strip()
                     }
                     # Add trial_number if it exists
                     if trial_numbers[i + generation_idx] is not None:
