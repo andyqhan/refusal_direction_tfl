@@ -69,12 +69,14 @@ def parse_arguments():
                         help='Enable thinking mode for Qwen3 models (default: False)')
 
     # Data source options (can use both simultaneously)
-    parser.add_argument('--csv_file', type=str,
-                        help='Path to CSV file with prompts (columns: "User prompt", "Category")')
+    parser.add_argument('--csv_file', type=str, action='append', dest='csv_files',
+                        help='Path to CSV file with prompts (columns: "User prompt", "Category"). Can be specified multiple times.')
     parser.add_argument('--use_gsm8k', action='store_true',
                         help='Use GSM8K dataset (can be combined with --csv_file)')
     parser.add_argument('--gsm8k_samples', type=int, default=10,
                         help='Number of GSM8K samples to use (default: 10)')
+    parser.add_argument('--n_trials', type=int, default=1,
+                        help='Number of times to run each prompt (default: 1)')
 
     return parser.parse_args()
 
@@ -210,12 +212,38 @@ def sample_gsm8k_questions(n_samples=10, seed=74):
     return formatted_dataset
 
 
+def replicate_dataset_for_trials(dataset, n_trials):
+    """
+    Replicate each item in the dataset n_trials times and add trial numbers.
+
+    Args:
+        dataset: List of dicts with 'instruction' and 'category' keys
+        n_trials: Number of times to replicate each item
+
+    Returns:
+        List of dicts with added 'trial_number' key
+    """
+    if n_trials == 1:
+        # Add trial_number=1 to each item
+        return [dict(item, trial_number=1) for item in dataset]
+
+    replicated_dataset = []
+    for item in dataset:
+        for trial_num in range(1, n_trials + 1):
+            # Create a copy of the item with trial number
+            item_copy = item.copy()
+            item_copy['trial_number'] = trial_num
+            replicated_dataset.append(item_copy)
+
+    return replicated_dataset
+
+
 def generate_with_intervention(model_base, dataset, direction, layer, coeff, max_new_tokens, batch_size, temperature, enable_thinking):
     """
     Generate completions with activation addition intervention.
 
     Returns:
-        List of completion dicts with 'category', 'prompt', and 'response' keys
+        List of completion dicts with 'category', 'prompt', 'response', and 'trial_number' keys
     """
     print(f"\nGenerating completions with intervention:")
     print(f"  Layer: {layer}")
@@ -285,17 +313,20 @@ def main():
         args = parse_arguments()
 
         # Validate at least one data source is provided
-        if not args.csv_file and not args.use_gsm8k:
+        if not args.csv_files and not args.use_gsm8k:
             print("ERROR: Must provide at least one data source (--csv_file or --use_gsm8k)")
             sys.exit(1)
 
         print("=" * 80)
         data_sources = []
-        if args.csv_file:
-            data_sources.append(f"CSV: {args.csv_file}")
+        if args.csv_files:
+            for csv_file in args.csv_files:
+                data_sources.append(f"CSV: {csv_file}")
         if args.use_gsm8k:
             data_sources.append("GSM8K")
         print(f"Testing Candidate Correction Directions on: {', '.join(data_sources)}")
+        if args.n_trials > 1:
+            print(f"Running {args.n_trials} trials per prompt")
         print("=" * 80)
 
         # Load model
@@ -317,32 +348,40 @@ def main():
         all_completions = []
         data_source_info = []
 
-        # Load and process CSV dataset if provided
-        if args.csv_file:
-            print("\n" + "=" * 80)
-            print("PROCESSING CSV DATASET")
-            print("=" * 80)
-            csv_dataset = load_csv_prompts(args.csv_file)
-            csv_completions = generate_with_intervention(
-                model_base=model_base,
-                dataset=csv_dataset,
-                direction=direction,
-                layer=args.layer,
-                coeff=args.coeff,
-                max_new_tokens=args.max_new_tokens,
-                batch_size=args.batch_size,
-                temperature=args.temperature,
-                enable_thinking=args.enable_thinking
-            )
-            # Add source label to each completion
-            for completion in csv_completions:
-                completion['data_source'] = 'csv'
-            all_completions.extend(csv_completions)
-            data_source_info.append({
-                "type": "csv",
-                "file": args.csv_file,
-                "num_samples": len(csv_completions)
-            })
+        # Load and process CSV datasets if provided
+        if args.csv_files:
+            for csv_file_idx, csv_file in enumerate(args.csv_files, 1):
+                print("\n" + "=" * 80)
+                print(f"PROCESSING CSV DATASET {csv_file_idx}/{len(args.csv_files)}")
+                print("=" * 80)
+                csv_dataset = load_csv_prompts(csv_file)
+
+                # Replicate dataset for multiple trials
+                csv_dataset = replicate_dataset_for_trials(csv_dataset, args.n_trials)
+                print(f"Total prompts after replication for {args.n_trials} trial(s): {len(csv_dataset)}")
+
+                csv_completions = generate_with_intervention(
+                    model_base=model_base,
+                    dataset=csv_dataset,
+                    direction=direction,
+                    layer=args.layer,
+                    coeff=args.coeff,
+                    max_new_tokens=args.max_new_tokens,
+                    batch_size=args.batch_size,
+                    temperature=args.temperature,
+                    enable_thinking=args.enable_thinking
+                )
+                # Add source label to each completion
+                for completion in csv_completions:
+                    completion['data_source'] = 'csv'
+                    completion['csv_file'] = csv_file
+                all_completions.extend(csv_completions)
+                data_source_info.append({
+                    "type": "csv",
+                    "file": csv_file,
+                    "num_samples": len(csv_completions),
+                    "n_trials": args.n_trials
+                })
 
         # Load and process GSM8K dataset if requested
         if args.use_gsm8k:
@@ -350,6 +389,11 @@ def main():
             print("PROCESSING GSM8K DATASET")
             print("=" * 80)
             gsm8k_dataset = sample_gsm8k_questions(n_samples=args.gsm8k_samples, seed=74)
+
+            # Replicate dataset for multiple trials
+            gsm8k_dataset = replicate_dataset_for_trials(gsm8k_dataset, args.n_trials)
+            print(f"Total prompts after replication for {args.n_trials} trial(s): {len(gsm8k_dataset)}")
+
             gsm8k_completions = generate_with_intervention(
                 model_base=model_base,
                 dataset=gsm8k_dataset,
@@ -368,7 +412,8 @@ def main():
             data_source_info.append({
                 "type": "gsm8k",
                 "num_samples": len(gsm8k_completions),
-                "gsm8k_samples": args.gsm8k_samples
+                "gsm8k_samples": args.gsm8k_samples,
+                "n_trials": args.n_trials
             })
 
         # Prepare metadata
@@ -382,6 +427,7 @@ def main():
             "max_new_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "batch_size": args.batch_size,
+            "n_trials": args.n_trials,
             "data_sources": data_source_info,
             "total_samples": len(all_completions)
         }

@@ -74,6 +74,8 @@ class ModelBase(ABC):
         completions = []
         instructions = [x['instruction'] for x in dataset]
         categories = [x['category'] for x in dataset]
+        # Extract trial_number if it exists in the dataset
+        trial_numbers = [x.get('trial_number', None) for x in dataset]
 
         for i in tqdm(range(0, len(dataset), batch_size)):
             tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size], enable_thinking=enable_thinking)
@@ -88,10 +90,14 @@ class ModelBase(ABC):
                 generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
 
                 for generation_idx, generation in enumerate(generation_toks):
-                    completions.append({
+                    completion = {
                         'category': categories[i + generation_idx],
                         'prompt': instructions[i + generation_idx],
                         'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
-                    })
+                    }
+                    # Add trial_number if it exists
+                    if trial_numbers[i + generation_idx] is not None:
+                        completion['trial_number'] = trial_numbers[i + generation_idx]
+                    completions.append(completion)
 
         return completions

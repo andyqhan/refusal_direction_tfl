@@ -28,23 +28,33 @@
 #   --pos: Which token position from mean_diffs (0-indexed, or negative)
 #
 # Optional arguments:
-#   --csv_file: Path to CSV file with prompts
+#   --csv_file: Path to CSV file with prompts (can be specified multiple times)
 #   --use_gsm8k: Use GSM8K dataset
 #   --gsm8k_samples: Number of GSM8K samples (default: 10)
+#   --n_trials: Number of times to run each prompt (default: 1)
 #   --coeff: Addition strength coefficient (default: 2.0)
 #   --max_new_tokens: Number of tokens to generate (default: 256)
 #   --temperature: Sampling temperature (default: 0.7)
 #   --batch_size: Batch size for generation (default: 8)
 #   --output_file: Path to save completions JSON
+#   --enable-thinking: Enable thinking mode for Qwen3 models
 #
 # Examples:
+#   # Single data source (GSM8K)
 #   sbatch hpc/run_completions.slurm --model_path meta-llama/Llama-3.2-8B-Instruct \
 #       --mean_diffs_path results/mean_diffs.pt --layer 15 --pos -1 --use_gsm8k
 #
+#   # Multiple CSV files with trials
+#   sbatch hpc/run_completions.slurm --model_path Qwen/Qwen3-8B \
+#       --mean_diffs_path results/mean_diffs.pt --layer 20 --pos -1 \
+#       --csv_file data/prompts1.csv --csv_file data/prompts2.csv --n_trials 3 \
+#       --output_file results/completions.json
+#
+#   # Combined sources with multiple trials
 #   sbatch hpc/run_completions.slurm --model_path Qwen/Qwen3-8B \
 #       --mean_diffs_path results/mean_diffs.pt --layer 20 --pos -1 \
 #       --csv_file data/prompts.csv --use_gsm8k --gsm8k_samples 50 \
-#       --output_file results/completions.json
+#       --n_trials 2 --output_file results/completions.json
 # =============================================================================
 
 set -e  # Exit on error
@@ -141,12 +151,16 @@ if [ -z "$SCRIPT_ARGS" ]; then
     echo "  --pos: Which token position from mean_diffs"
     echo ""
     echo "At least one data source required:"
-    echo "  --csv_file: Path to CSV file with prompts"
+    echo "  --csv_file: Path to CSV file with prompts (can specify multiple times)"
     echo "  --use_gsm8k: Use GSM8K dataset"
+    echo ""
+    echo "Optional:"
+    echo "  --n_trials: Number of times to run each prompt (default: 1)"
     echo ""
     echo "Example:"
     echo "  sbatch hpc/run_completions.slurm --model_path Qwen/Qwen3-8B \\"
-    echo "      --mean_diffs_path results/mean_diffs.pt --layer 15 --pos -1 --use_gsm8k"
+    echo "      --mean_diffs_path results/mean_diffs.pt --layer 15 --pos -1 \\"
+    echo "      --csv_file data/prompts.csv --n_trials 2 --use_gsm8k"
     exit 1
 fi
 
