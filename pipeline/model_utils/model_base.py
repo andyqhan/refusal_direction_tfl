@@ -64,7 +64,7 @@ class ModelBase(ABC):
     def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff: float, layer: int):
         pass
 
-    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64, temperature=None):
+    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64, temperature=None, enable_thinking=False):
         if temperature is not None and temperature > 0:
             generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature)
         else:
@@ -76,7 +76,7 @@ class ModelBase(ABC):
         categories = [x['category'] for x in dataset]
 
         for i in tqdm(range(0, len(dataset), batch_size)):
-            tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size])
+            tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size], enable_thinking=enable_thinking)
 
             with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
                 generation_toks = self.model.generate(

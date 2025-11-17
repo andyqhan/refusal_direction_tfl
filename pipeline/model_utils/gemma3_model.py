@@ -57,6 +57,7 @@ def tokenize_instructions_gemma3_chat(
     outputs: List[str]=None,
     system: str=None,
     include_trailing_whitespace=True,
+    enable_thinking=False,
 ):
     """
     Tokenize instructions using chat templates.
@@ -65,6 +66,7 @@ def tokenize_instructions_gemma3_chat(
         instructions: Can be either:
             - List of strings (legacy format) - will use old template formatting
             - List of chat dicts [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
+        enable_thinking: Unused for Gemma3 (only applicable to Qwen3)
     """
     # Check if instructions are already in chat format
     if instructions and isinstance(instructions[0], list):

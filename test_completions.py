@@ -65,6 +65,8 @@ def parse_arguments():
                         help='Path to save completions JSON (prints to stdout if not specified)')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size for generation')
+    parser.add_argument('--enable-thinking', action='store_true',
+                        help='Enable thinking mode for Qwen3 models (default: False)')
 
     # Data source options (can use both simultaneously)
     parser.add_argument('--csv_file', type=str,
@@ -208,7 +210,7 @@ def sample_gsm8k_questions(n_samples=10, seed=74):
     return formatted_dataset
 
 
-def generate_with_intervention(model_base, dataset, direction, layer, coeff, max_new_tokens, batch_size, temperature):
+def generate_with_intervention(model_base, dataset, direction, layer, coeff, max_new_tokens, batch_size, temperature, enable_thinking):
     """
     Generate completions with activation addition intervention.
 
@@ -221,6 +223,7 @@ def generate_with_intervention(model_base, dataset, direction, layer, coeff, max
     print(f"  Max new tokens: {max_new_tokens}")
     print(f"  Temperature: {temperature}")
     print(f"  Batch size: {batch_size}")
+    print(f"  Enable thinking: {enable_thinking}")
 
     # Create activation addition hooks
     fwd_pre_hooks = [(
@@ -236,7 +239,8 @@ def generate_with_intervention(model_base, dataset, direction, layer, coeff, max
         fwd_hooks=fwd_hooks,
         batch_size=batch_size,
         max_new_tokens=max_new_tokens,
-        temperature=temperature
+        temperature=temperature,
+        enable_thinking=enable_thinking
     )
 
     print(f"Generated {len(completions)} completions")
@@ -327,7 +331,8 @@ def main():
                 coeff=args.coeff,
                 max_new_tokens=args.max_new_tokens,
                 batch_size=args.batch_size,
-                temperature=args.temperature
+                temperature=args.temperature,
+                enable_thinking=args.enable_thinking
             )
             # Add source label to each completion
             for completion in csv_completions:
@@ -353,7 +358,8 @@ def main():
                 coeff=args.coeff,
                 max_new_tokens=args.max_new_tokens,
                 batch_size=args.batch_size,
-                temperature=args.temperature
+                temperature=args.temperature,
+                enable_thinking=args.enable_thinking
             )
             # Add source label to each completion
             for completion in gsm8k_completions:

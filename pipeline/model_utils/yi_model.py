@@ -61,6 +61,7 @@ def tokenize_instructions_yi_chat(
     outputs: List[str]=None,
     system: str=None,
     include_trailing_whitespace=True,
+    enable_thinking=False,
 ):
     if outputs is not None:
         prompts = [

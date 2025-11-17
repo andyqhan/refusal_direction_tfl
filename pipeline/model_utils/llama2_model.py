@@ -52,7 +52,8 @@ def tokenize_instructions_llama2_chat(
     instructions: List[str],
     outputs: List[str]=None,
     system: str=None,
-    include_trailing_whitespace=True
+    include_trailing_whitespace=True,
+    enable_thinking=False,
 ):
     if outputs is not None:
         prompts = [

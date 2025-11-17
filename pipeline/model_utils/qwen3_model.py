@@ -59,6 +59,7 @@ def tokenize_instructions_qwen3_chat(
     outputs: List[str]=None,
     system: str=None,
     include_trailing_whitespace=True,
+    enable_thinking=False,
 ):
     """
     Tokenize instructions using chat templates.
@@ -67,12 +68,14 @@ def tokenize_instructions_qwen3_chat(
         instructions: Can be either:
             - List of strings (legacy format) - will use old template formatting
             - List of chat dicts [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
+        enable_thinking: Enable Qwen3's thinking mode (default: False for efficiency)
     """
     # Check if instructions are already in chat format
     if instructions and isinstance(instructions[0], list):
         # New chat format: use apply_chat_template
+        # Note: enable_thinking=False disables Qwen3's thinking mode for efficiency
         prompts = [
-            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=False)
+            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=False, enable_thinking=enable_thinking)
             for chat in instructions
         ]
     else:
