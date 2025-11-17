@@ -36,7 +36,8 @@ def get_mean_activations(model, tokenizer, instructions, tokenize_instructions_f
     fwd_pre_hooks = [(block_modules[layer], get_mean_activations_pre_hook(layer=layer, cache=mean_activations, n_samples=n_samples, positions=positions)) for layer in range(n_layers)]
 
     for i in tqdm(range(0, len(instructions), batch_size)):
-        inputs = tokenize_instructions_fn(instructions=instructions[i:i+batch_size], enable_thinking=enable_thinking)
+        # For extraction: complete conversations with assistant responses, so add_generation_prompt=False
+        inputs = tokenize_instructions_fn(instructions=instructions[i:i+batch_size], enable_thinking=enable_thinking, add_generation_prompt=False)
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=[]):
             model(
@@ -67,7 +68,7 @@ def generate_directions(model_base: ModelBase, harmful_instructions, harmless_in
         model_base.model_block_modules,
         batch_size=batch_size,
         positions=ACTIVATION_POSITIONS,
-        enable_thinking=True,  # Enable thinking during extraction to get activations from assistant tokens
+        enable_thinking=True,  # Not used for extraction (has_assistant triggers manual formatting)
     )
 
     assert mean_diffs.shape == (NUM_ACTIVATION_POSITIONS, model_base.model.config.num_hidden_layers, model_base.model.config.hidden_size)

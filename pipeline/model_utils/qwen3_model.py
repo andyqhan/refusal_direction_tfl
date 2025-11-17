@@ -60,6 +60,7 @@ def tokenize_instructions_qwen3_chat(
     system: str=None,
     include_trailing_whitespace=True,
     enable_thinking=False,
+    add_generation_prompt=True,
 ):
     """
     Tokenize instructions using chat templates.
@@ -69,16 +70,45 @@ def tokenize_instructions_qwen3_chat(
             - List of strings (legacy format) - will use old template formatting
             - List of chat dicts [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         enable_thinking: Enable Qwen3's thinking mode (default: False for efficiency)
+        add_generation_prompt: Add assistant prompt for generation (default: True)
+            - True: For generation tasks (user message only)
+            - False: For extraction tasks (complete conversation with assistant response)
     """
     # Check if instructions are already in chat format
     if instructions and isinstance(instructions[0], list):
-        # New chat format: use apply_chat_template
-        # Note: enable_thinking=False adds empty <think> tags to suppress thinking mode
-        # add_generation_prompt=True adds the assistant prompt and proper formatting
-        prompts = [
-            tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking)
-            for chat in instructions
-        ]
+        # New chat format - check if assistant response is included
+        has_assistant = any(msg.get("role") == "assistant" for msg in instructions[0])
+
+        # Warn if mismatched usage
+        if has_assistant and add_generation_prompt:
+            logger.warning(
+                "Chat includes assistant message but add_generation_prompt=True. "
+                "This will append an extra assistant prompt. "
+                "For extraction with prefilled responses, use add_generation_prompt=False."
+            )
+
+        if has_assistant:
+            # Complete conversation (extraction): manually format to avoid automatic think tag insertion
+            prompts = []
+            for chat in instructions:
+                prompt_parts = []
+                for msg in chat:
+                    role = msg["role"]
+                    content = msg["content"]
+                    if role == "user":
+                        prompt_parts.append(f"<|im_start|>user\n{content}<|im_end|>\n")
+                    elif role == "assistant":
+                        # Don't add <|im_end|> at the end - we want to extract from the response content
+                        prompt_parts.append(f"<|im_start|>assistant\n{content}")
+                prompts.append("".join(prompt_parts))
+        else:
+            # User-only (generation): use apply_chat_template
+            # Note: enable_thinking=False adds empty <think> tags to suppress thinking mode
+            # add_generation_prompt=True adds the assistant prompt and proper formatting
+            prompts = [
+                tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=add_generation_prompt, enable_thinking=enable_thinking)
+                for chat in instructions
+            ]
     else:
         # Legacy format: use old template formatting
         if outputs is not None:
